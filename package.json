@@ -2,6 +2,7 @@
   "name": "diploma-root",
   "version": "1.0.0",
   "scripts": {
-    "start:frontend": "cd frontend && npm start"
+    "start:frontend": "cd frontend && npm start",
+    "start:backend": "uvicorn app.main:app --reload"
   }
 }

@@ -1,5 +1,5 @@
 {
-  "name": "diploma-root",
+  "name": "disinformation-detector",
   "version": "1.0.0",
   "scripts": {
     "start:frontend": "cd frontend && npm start",

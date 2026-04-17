@@ -26,3 +26,5 @@ frontend/build/
 # OS
 .DS_Store
 Thumbs.db
+
+synthetic_generator/output/

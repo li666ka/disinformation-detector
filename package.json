@@ -2,7 +2,8 @@
   "name": "disinformation-detector",
   "version": "1.0.0",
   "scripts": {
-    "start:frontend": "cd frontend && npm start",
-    "start:backend": "uvicorn app.main:app --reload"
+    "start:ui": "cd ui && npm start",
+    "start:api": "uvicorn api.main:app --reload",
+    "start:ml-api": "python3 ml-api/main.py"
   }
 }

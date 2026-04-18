@@ -197,17 +197,17 @@ export interface ConfusionMatrix {
 
 export interface IndividualResult {
   model: ModelType;
-  label: "FAKE" | "REAL";
+  label: "FAKE" | "REAL" | "UNCERTAIN";
   probability: number | null;
   feature_values?: Record<string, number>;
   reason?: string;
 }
 
 export interface EnsembleResult {
-  label: "FAKE" | "REAL";
+  label: "FAKE" | "REAL" | "UNCERTAIN";
   confidence: number;
   strategy: string;
-  votes: { FAKE: number; REAL: number };
+  votes: { FAKE: number; REAL: number; UNCERTAIN?: number };
   excluded: string[];
 }
 
@@ -288,11 +288,12 @@ export interface EvalResponse {
 export interface ModelRecord {
   id: number;
   experiment_id?: string;
-  filename: string;
-  name?: string;
+  filename?: string | null;
+  name: string;
   model_type: string;
   accuracy?: number;
   is_active: boolean;
+  llm_config?: string | null;
   created_at: string;
 }
 
@@ -329,16 +330,37 @@ export type SourceType = "bluesky" | "mastodon" | "rss";
 
 export interface NewsItem {
   id: string;
-  source: SourceType;
+  source: SourceType | string;
   text: string;
   title?: string;
+  url?: string;
+  created_at?: string;
+  language?: string;
+
+  // Author signals
   author?: string;
   author_handle?: string;
-  created_at?: string;
-  url?: string;
+  author_account_age_days?: number | null;
+  author_followers_count?: number | null;
+  author_following_count?: number | null;
+  author_posts_count?: number | null;
+  author_is_verified?: boolean | null;
+  author_has_custom_domain?: boolean | null;
+  author_has_description?: boolean | null;
+
+  // Engagement signals
   likes_count?: number | null;
   reposts_count?: number | null;
   replies_count?: number | null;
+  quote_count?: number | null;
+
+  // Platform-specific
+  has_url_in_text?: boolean | null;
+  has_mentions?: boolean | null;
+  is_reply?: boolean | null;
+  labels?: string[] | null;
+
+  raw_metadata?: Record<string, unknown> | null;
 }
 
 export interface PostClassification {
@@ -348,5 +370,253 @@ export interface PostClassification {
 }
 
 export interface ClassifiedPost extends NewsItem {
-  classification: PostClassification | null;
+  classification: {
+    label: "FAKE" | "REAL" | "UNCERTAIN";
+    confidence: number;
+    probability: number | null; // null when UNCERTAIN
+    reason?: string; // optional explanation from LLM
+  } | null;
+}
+
+// ── Datasets ──────────────────────────────────────────────────────────────
+export interface Dataset {
+  id: number;
+  user_id: number;
+  name: string;
+  description: string | null;
+  total_news: number;
+  fake_count: number;
+  real_count: number;
+  unlabeled_count: number;
+  has_news: boolean;
+  has_tweets: boolean;
+  has_retweets: boolean;
+  has_replies: boolean;
+  has_likes: boolean;
+  has_users: boolean;
+  has_evidence: boolean;
+  file_size_bytes: number;
+  is_active: boolean;
+  created_at: string;
+}
+
+export interface DatasetUploadResponse {
+  dataset: Dataset;
+  preview: {
+    news_head: Record<string, any>[];
+    counts: Record<string, number>;
+    news_columns: string[];
+  };
+  warnings: string[];
+}
+
+export interface DatasetStats {
+  dataset_id: number;
+  total_news: number;
+  fake_count: number;
+  real_count: number;
+  unlabeled_count: number;
+  text_length_stats: {
+    min: number;
+    median: number;
+    mean: number;
+    max: number;
+    p95: number;
+  };
+  empty_text_count: number;
+  duplicate_text_count: number;
+  total_tweets?: number;
+  avg_tweets_per_news?: number;
+  news_with_tweets_pct?: number;
+  total_likes?: number;
+  total_retweets?: number;
+  total_replies?: number;
+  total_users?: number;
+  verified_users_pct?: number;
+  avg_followers_count?: number;
+  top_domains: { domain: string; count: number }[];
+}
+
+// ── LLM Presets ───────────────────────────────────────────────────────────
+export type LLMMode = "zero_shot" | "few_shot" | "cot" | "bagging";
+
+export interface FewShotExample {
+  text: string;
+  label: "FAKE" | "REAL";
+}
+
+export interface LLMPresetDefaults {
+  base_models: string[];
+  modes: LLMMode[];
+  default_system_prompt: string;
+  default_cot_instruction: string;
+  default_bagging_n_calls: number;
+  default_temperature: number;
+  default_max_output_tokens: number;
+}
+
+export interface LLMPresetCreate {
+  name: string;
+  base_model: string;
+  mode: LLMMode;
+  system_prompt?: string | null;
+  temperature: number;
+  max_output_tokens: number;
+  few_shot_examples?: FewShotExample[] | null;
+  cot_instruction?: string | null;
+  bagging_n_calls?: number;
+}
+
+export interface LLMPresetTestRequest {
+  base_model: string;
+  mode: LLMMode;
+  system_prompt?: string | null;
+  temperature: number;
+  max_output_tokens: number;
+  few_shot_examples?: FewShotExample[] | null;
+  cot_instruction?: string | null;
+  bagging_n_calls?: number;
+  test_text: string;
+}
+
+export interface LLMPresetTestResponse {
+  label: "FAKE" | "REAL" | "UNCERTAIN";
+  confidence: number;
+  reason: string;
+  base_model_used: string;
+  elapsed_seconds: number;
+}
+
+// ── Cross-platform verification ──────────────────────────────────────────
+
+export interface VerificationStats {
+  total_related: number;
+  by_source: Record<string, number>;
+  original_domain: string | null;
+  domain_mentioned_count: number;
+  total_engagement: {
+    likes: number;
+    reposts: number;
+    replies: number;
+  };
+  verified_authors_pct: number | null;
+  custom_domain_authors_pct: number | null;
+  avg_account_age_days: number | null;
+  min_account_age_days: number | null;
+  avg_followers_count: number | null;
+  median_followers_count: number | null;
+  posts_with_url_pct: number;
+  reply_ratio_pct: number;
+}
+
+export interface VerificationSignal {
+  type: string;
+  severity: "info" | "warn" | "alert";
+  value?: number;
+  note: string;
+}
+
+export interface VerifyNewsRequest {
+  url?: string;
+  text?: string;
+  title?: string;
+  social_sources?: string[];
+  limit_per_source?: number;
+}
+
+export interface VerifyNewsResponse {
+  original: Record<string, unknown>;
+  query_used: string;
+  related_posts: NewsItem[];
+  stats: VerificationStats;
+  signals: VerificationSignal[];
+}
+
+// ── User Profile (author, liker, reposter, reply author) ────────────────
+
+export interface UserProfile {
+  id: string;
+  source: string;
+  handle?: string | null;
+  display_name?: string | null;
+
+  description?: string | null;
+  avatar_url?: string | null;
+  created_at?: string | null;
+  account_age_days?: number | null;
+
+  followers_count?: number | null;
+  following_count?: number | null;
+  posts_count?: number | null;
+
+  is_verified?: boolean | null;
+  has_custom_domain?: boolean | null;
+  is_bot?: boolean | null;
+  has_description?: boolean | null;
+
+  followers_following_ratio?: number | null;
+}
+
+// ── Reply (post response with full author profile) ──────────────────────
+
+export interface Reply {
+  id: string;
+  text: string;
+  created_at?: string | null;
+  author?: UserProfile | null;
+
+  likes_count?: number | null;
+  reposts_count?: number | null;
+  replies_count?: number | null;
+
+  url?: string | null;
+}
+
+// ── Profile group stats (computed aggregates) ───────────────────────────
+
+export interface ProfileGroupStats {
+  total: number;
+  verified_count?: number;
+  verified_pct?: number;
+  custom_domain_count?: number;
+  custom_domain_pct?: number;
+  bots_count?: number;
+  with_description_pct?: number;
+  avg_account_age_days?: number | null;
+  median_account_age_days?: number | null;
+  young_accounts_30d_pct?: number;
+  young_accounts_90d_pct?: number;
+  avg_followers_count?: number | null;
+  median_followers_count?: number | null;
+  low_followers_pct?: number;
+  suspicious_ratio_pct?: number;
+}
+
+// ── Post Details (full interaction data) ────────────────────────────────
+
+export interface PostDetailsStats {
+  likers?: ProfileGroupStats;
+  reposters?: ProfileGroupStats;
+  repliers?: ProfileGroupStats;
+  quoters?: ProfileGroupStats;
+  all_participants?: ProfileGroupStats;
+}
+
+export interface PostDetailsFetchedLimits {
+  likes_fetched?: number;
+  likes_total?: number | null;
+  reposts_fetched?: number;
+  reposts_total?: number | null;
+  replies_fetched?: number;
+  replies_total?: number | null;
+}
+
+export interface PostDetailsResponse {
+  post: NewsItem;
+  replies: Reply[];
+  reposted_by: UserProfile[];
+  liked_by: UserProfile[];
+  quoted_by: UserProfile[];
+  stats?: PostDetailsStats;
+  fetched_limits?: PostDetailsFetchedLimits;
 }

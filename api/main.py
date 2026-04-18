@@ -1,32 +1,37 @@
 # api/main.py
+
+# Load .env BEFORE any imports that read environment variables (auth, llm_predictor, etc.)
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 import json
 import logging
 import uuid
+import os
+import requests
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from sqlalchemy.orm import Session
 from api.model import FakeNewsModel
 from api.ensemble import apply_voting
 from api.schemas import (
     PredictRequest as PredictRequestV2,
     NBConfig, DeBERTaConfig, LLMConfig,
 )
-from api.database import create_tables, get_db, Experiment, ModelRecord, User
+from api.database import create_tables, get_db, Experiment, ModelRecord, User, Dataset
 from api.auth import get_current_user
 from api.routers import auth as auth_router
 from api.routers import experiments as experiments_router
 from api.routers import models_router
 from api.routers import sources as sources_router
-from sqlalchemy.orm import Session
-import os
-import requests
-from api.text_preprocessing import preprocess_for_bayes, preprocess_for_transformer
+from api.routers import llm_presets as llm_presets_router
+from api.routers import datasets as datasets_router
 
-try:
-    from dotenv import load_dotenv
-    load_dotenv()
-except ImportError:
-    pass
+from api.text_preprocessing import preprocess_for_bayes, preprocess_for_transformer
 
 # Configure logging
 logging.basicConfig(
@@ -57,11 +62,14 @@ app.add_middleware(
 detector = FakeNewsModel()
 
 # Ініціалізація БД та підключення роутерів
+os.makedirs("uploaded_datasets", exist_ok=True)
 create_tables()
 app.include_router(auth_router.router)
 app.include_router(experiments_router.router)
 app.include_router(models_router.router)
 app.include_router(sources_router.router)
+app.include_router(datasets_router.router)
+app.include_router(llm_presets_router.router)
 
 # 3. Схеми для /predict — імпортовані з api.schemas (PredictRequestV2)
 
@@ -170,18 +178,58 @@ def _run_model(model_cfg, text: str, metadata: dict | None = None) -> dict:
             'feature_values': None,
         }
 
-    # ── LLM: local Gemini API call ─────────────────────────────────────────
+    # ── LLM: preset-driven Gemini call ─────────────────────────────────────
     if mtype == 'llm':
-        from api.llm_predictor import predict as llm_predict
-        llm_mode = getattr(model_cfg, 'mode', 'single')
+        from api.llm_predictor import predict_with_preset
+
+        preset_id = getattr(model_cfg, 'preset_id', None)
+        if preset_id is not None:
+            # Load preset from DB
+            from api.database import SessionLocal
+            session = SessionLocal()
+            try:
+                record = session.query(ModelRecord).filter(
+                    ModelRecord.id == preset_id,
+                    ModelRecord.model_type == "llm",
+                ).first()
+                if not record or not record.llm_config:
+                    raise HTTPException(
+                        status_code=404,
+                        detail=f"LLM preset id={preset_id} not found or has no config",
+                    )
+                preset_config = json.loads(record.llm_config)
+            finally:
+                session.close()
+        else:
+            # Inline default config (backward compat)
+            llm_mode = getattr(model_cfg, 'mode', 'zero_shot')
+            preset_config = {
+                "base_model": "gemini-2.5-flash-lite",
+                "mode": "bagging" if llm_mode == "bagging" else "zero_shot",
+                "temperature": 0.7 if llm_mode == "bagging" else 0.0,
+                "max_output_tokens": 200,
+                "bagging_n_calls": 3,
+            }
+
         try:
-            llm_result = llm_predict(preprocess_for_transformer(text), mode=llm_mode, feature_values=None)
+            llm_result = predict_with_preset(
+                preprocess_for_transformer(text),
+                preset_config,
+            )
+            label = llm_result['label']
+            confidence = llm_result['confidence']
+            if label == "UNCERTAIN":
+                probability = None
+            else:
+                probability = confidence if label == "FAKE" else 1.0 - confidence
             return {
                 'model': mtype,
-                'label': llm_result['label'],
-                'probability': llm_result['confidence'],
+                'label': label,
+                'probability': probability,
                 'feature_values': None,
                 'reason': llm_result.get('reason', ''),
+                'base_model_used': llm_result.get('base_model_used', ''),
+                'mode': llm_result.get('mode', ''),
             }
         except Exception as e:
             logger.error(f"LLM prediction failed: {e}")
@@ -265,15 +313,44 @@ def analyze_text(
             raise HTTPException(status_code=503, detail="Colab недоступний. Перевірте COLAB_NGROK_URL.")
 
     if mtype == "llm":
-        from api.llm_predictor import predict as llm_predict
+        from api.llm_predictor import predict_with_preset
+
+        # LLM presets store config as JSON in record.llm_config
+        if not record.llm_config:
+            raise HTTPException(
+                status_code=400,
+                detail="LLM model record has no config. Create a preset first via POST /llm-presets",
+            )
         try:
-            r = llm_predict(preprocess_for_transformer(request.text), mode="single")
+            preset_config = json.loads(record.llm_config)
+        except json.JSONDecodeError as e:
+            raise HTTPException(status_code=500, detail=f"Invalid llm_config JSON: {e}")
+
+        try:
+            r = predict_with_preset(
+                preprocess_for_transformer(request.text),
+                preset_config,
+            )
+            if r["label"] == "UNCERTAIN":
+                return {
+                    "label": "UNCERTAIN",
+                    "confidence": 0.0,
+                    "probability": None,
+                    "reason": r.get("reason", ""),
+                    "base_model_used": r.get("base_model_used", ""),
+                    "mode": r.get("mode", ""),
+                }
             prob = r["confidence"] if r["label"] == "FAKE" else 1.0 - r["confidence"]
             return {
                 "label": r["label"],
                 "confidence": r["confidence"],
                 "probability": prob,
+                "reason": r.get("reason", ""),
+                "base_model_used": r.get("base_model_used", ""),
+                "mode": r.get("mode", ""),
             }
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
         except Exception as e:
             raise HTTPException(status_code=503, detail=f"LLM error: {e}")
 
@@ -417,14 +494,52 @@ def train_model(
         target_url = f"{local_base}/run_training"
         print(f"Маршрутизація: Local Flask -> {target_url}")
 
-    # 4. Готуємо Payload для ML-сервера
+    # 4. Find active dataset for current user
+    active_ds = db.query(Dataset).filter(
+        Dataset.user_id == current_user.id,
+        Dataset.is_active == True,
+    ).first()
+    if not active_ds:
+        raise HTTPException(
+            status_code=400,
+            detail="Немає активного датасету. Завантажте датасет і зробіть його активним.",
+        )
+
+    news_csv_path = os.path.join(active_ds.folder_path, "news.csv")
+    if not os.path.exists(news_csv_path):
+        raise HTTPException(
+            status_code=500,
+            detail=f"news.csv не знайдено у датасеті: {news_csv_path}",
+        )
+
+    import base64
+    with open(news_csv_path, "rb") as f:
+        news_csv_b64 = base64.b64encode(f.read()).decode("ascii")
+
+    # 5. Готуємо Payload для ML-сервера
     payload = {
         "user_id": current_user.id,
         "experiment_id": request.experiment_id or "default_exp",
-        "model_type": actual_model_type, # Важливо для універсального ендпоїнту Colab
+        "model_type": actual_model_type,
         "model_params": model_params,
-        "preprocessing": request.preprocessing or {}
+        "preprocessing": request.preprocessing or {},
+        "dataset_id": active_ds.id,
+        "dataset_name": active_ds.name,
+        "news_csv_b64": news_csv_b64,
     }
+
+    # Optional: send tweets.csv and users.csv for social features
+    if active_ds.has_tweets:
+        tweets_path = os.path.join(active_ds.folder_path, "tweets.csv")
+        if os.path.exists(tweets_path):
+            with open(tweets_path, "rb") as f:
+                payload["tweets_csv_b64"] = base64.b64encode(f.read()).decode("ascii")
+
+    if active_ds.has_users:
+        users_path = os.path.join(active_ds.folder_path, "users.csv")
+        if os.path.exists(users_path):
+            with open(users_path, "rb") as f:
+                payload["users_csv_b64"] = base64.b64encode(f.read()).decode("ascii")
 
     print(f"Відправка на ML-сервер: {target_url}")
 
@@ -464,6 +579,7 @@ def train_model(
     exp = Experiment(
         experiment_id=exp_id,
         user_id=current_user.id,
+        dataset_id=active_ds.id,
         model_type=actual_model_type,
         model_file=ml_data.get("path"),
         accuracy=metrics.get("accuracy"),

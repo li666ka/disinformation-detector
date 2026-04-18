@@ -45,9 +45,10 @@ export interface NewsItem {
  */
 export interface ClassifiedPost extends NewsItem {
   classification: {
-    label: "FAKE" | "REAL";
+    label: "FAKE" | "REAL" | "UNCERTAIN";
     confidence: number;
-    probability: number;
+    probability: number | null; // null when UNCERTAIN
+    reason?: string; // optional explanation from LLM
   } | null;
 }
 

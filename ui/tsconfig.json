@@ -15,10 +15,12 @@
     "resolveJsonModule": true,
     "isolatedModules": true,
     "noEmit": true,
-    "jsx": "react-jsx"
-    ,
-    "types": ["node", "react-scripts"]
+    "jsx": "react-jsx",
+    "types": ["node", "react-scripts"],
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["./src/*"]
+    }
   },
   "include": ["src"]
 }
-

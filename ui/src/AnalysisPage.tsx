@@ -1,5 +1,12 @@
 import React, { useEffect, useState } from "react";
 import api from "./api";
+import { cn } from "./lib/utils";
+import { Button } from "./components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "./components/ui/card";
+import { Textarea } from "./components/ui/textarea";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./components/ui/select";
+import { AlertTriangle, CheckCircle2, Loader2 } from "lucide-react";
+import { toast } from "sonner";
 import type { ModelRecord } from "./types";
 
 interface AnalyzeResult {
@@ -15,7 +22,6 @@ export default function AnalysisPage() {
   const [result, setResult] = useState<AnalyzeResult | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
   const [loadingModels, setLoadingModels] = useState<boolean>(true);
-  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     api.get("/models")
@@ -28,101 +34,141 @@ export default function AnalysisPage() {
   }, []);
 
   const handleSubmit = async () => {
-    if (!text.trim()) { setError("Введіть текст для аналізу"); return; }
-    if (!modelId) { setError("Оберіть модель"); return; }
+    if (!text.trim()) { toast.error("Введіть текст для аналізу"); return; }
+    if (!modelId) { toast.error("Оберіть модель"); return; }
 
     setLoading(true);
-    setError(null);
     setResult(null);
     try {
       const { data } = await api.post("/analyze", { text, model_id: modelId });
       setResult(data);
     } catch (err: any) {
       const detail = err.response?.data?.detail;
-      setError(typeof detail === "string" ? detail : "Помилка під час аналізу");
+      toast.error(typeof detail === "string" ? detail : "Помилка під час аналізу");
     } finally {
       setLoading(false);
     }
   };
 
   const isFake = result?.label === "FAKE";
-
   const selectedModel = models.find((m) => m.id === modelId);
 
   return (
-    <div style={{ maxWidth: 680, margin: "0 auto" }}>
-      <div className="section-block">
-        <h2>Модель</h2>
-        {loadingModels ? (
-          <p style={{ color: "#888", fontSize: 13 }}>Завантаження моделей...</p>
-        ) : models.length === 0 ? (
-          <p style={{ color: "#888", fontSize: 13 }}>
-            Навчених моделей немає. Спочатку навчіть модель на вкладці "Навчання моделі".
-          </p>
-        ) : (
-          <select
-            className="translator-select"
-            value={modelId ?? ""}
-            onChange={(e) => { setModelId(Number(e.target.value)); setResult(null); setError(null); }}
-            style={{ maxWidth: 400 }}
+    <div className="space-y-6 max-w-2xl mx-auto">
+      <div>
+        <h2 className="text-2xl font-bold tracking-tight">Аналіз тексту</h2>
+        <p className="text-muted-foreground">Перевірте текст на ознаки дезінформації</p>
+      </div>
+
+      {/* Model Selection */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Модель</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {loadingModels ? (
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Завантаження моделей...
+            </div>
+          ) : models.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              Навчених моделей немає. Спочатку навчіть модель на вкладці "Навчання моделі".
+            </p>
+          ) : (
+            <div className="space-y-2">
+              <Select
+                value={modelId?.toString() || ""}
+                onValueChange={(v) => { setModelId(Number(v)); setResult(null); }}
+              >
+                <SelectTrigger className="max-w-sm">
+                  <SelectValue placeholder="Оберіть модель" />
+                </SelectTrigger>
+                <SelectContent>
+                  {models.map((m) => (
+                    <SelectItem key={m.id} value={m.id.toString()}>
+                      {m.name || m.model_type}
+                      {m.accuracy != null ? ` — ${(m.accuracy * 100).toFixed(1)}%` : ""}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {selectedModel && (
+                <p className="text-xs text-muted-foreground">
+                  Тип: <strong>{selectedModel.model_type}</strong>
+                  {selectedModel.accuracy != null && <> · Accuracy: <strong>{(selectedModel.accuracy * 100).toFixed(1)}%</strong></>}
+                </p>
+              )}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Text Input */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Текст для аналізу</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <Textarea
+            rows={7}
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            placeholder="Вставте текст новини для перевірки..."
+          />
+          <Button
+            className="w-full"
+            size="lg"
+            onClick={handleSubmit}
+            disabled={loading || models.length === 0}
           >
-            {models.map((m) => (
-              <option key={m.id} value={m.id}>
-                {m.name || m.model_type}
-                {m.accuracy != null ? ` — ${(m.accuracy * 100).toFixed(1)}%` : ""}
-              </option>
-            ))}
-          </select>
-        )}
-        {selectedModel && (
-          <p style={{ fontSize: 11, color: "#888", marginTop: 6 }}>
-            Тип: <strong>{selectedModel.model_type}</strong>
-            {selectedModel.accuracy != null && <> · Accuracy: <strong>{(selectedModel.accuracy * 100).toFixed(1)}%</strong></>}
-          </p>
-        )}
-      </div>
+            {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+            {loading ? "Аналіз..." : "Аналізувати"}
+          </Button>
+        </CardContent>
+      </Card>
 
-      <div className="section-block">
-        <h2>Текст для аналізу</h2>
-        <textarea
-          className="text-input"
-          rows={7}
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          placeholder="Вставте текст новини для перевірки..."
-        />
-        <button
-          className="analyze-btn"
-          onClick={handleSubmit}
-          disabled={loading || models.length === 0}
-          style={{ marginTop: 12 }}
-        >
-          {loading ? "Аналіз..." : "Аналізувати"}
-        </button>
-      </div>
-
-      {error && <div className="error">{error}</div>}
-
+      {/* Verdict */}
       {result && (
-        <div className="result">
-          <div
-            className="verdict"
-            style={{
-              backgroundColor: isFake
-                ? result.confidence > 0.7 ? "#dc3545" : "#ffc107"
-                : result.confidence > 0.7 ? "#28a745" : "#ffc107",
-            }}
-          >
-            <h2>{isFake ? "ДЕЗІНФОРМАЦІЯ" : "ДОСТОВІРНО"}</h2>
-            <p>Впевненість: {(result.confidence * 100).toFixed(1)}%</p>
-          </div>
-          <div className="details">
-            <ul>
-              <li><strong>Модель:</strong> {selectedModel?.name || selectedModel?.model_type}</li>
-              <li><strong>Ймовірність FAKE:</strong> {(result.probability * 100).toFixed(1)}%</li>
+        <Card className={cn(
+          "border-2",
+          isFake ? "border-red-500 bg-red-50 dark:bg-red-950/20" : "border-green-500 bg-green-50 dark:bg-green-950/20",
+        )}>
+          <CardContent className="py-8 text-center">
+            {isFake ? (
+              <AlertTriangle className="h-12 w-12 text-red-500 mx-auto mb-3" />
+            ) : (
+              <CheckCircle2 className="h-12 w-12 text-green-500 mx-auto mb-3" />
+            )}
+            <h2 className={cn(
+              "text-3xl font-bold",
+              isFake ? "text-red-600 dark:text-red-400" : "text-green-600 dark:text-green-400"
+            )}>
+              {isFake ? "ДЕЗІНФОРМАЦІЯ" : "ДОСТОВІРНО"}
+            </h2>
+            <p className="text-muted-foreground mt-2">
+              Впевненість: {(result.confidence * 100).toFixed(1)}%
+            </p>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Details */}
+      {result && (
+        <Card>
+          <CardContent className="p-4">
+            <ul className="space-y-2 text-sm">
+              <li className="flex justify-between py-1 border-b border-border">
+                <span className="font-medium">Модель</span>
+                <span className="text-muted-foreground">{selectedModel?.name || selectedModel?.model_type}</span>
+              </li>
+              <li className="flex justify-between py-1">
+                <span className="font-medium">Ймовірність FAKE</span>
+                <span className="text-muted-foreground">{(result.probability * 100).toFixed(1)}%</span>
+              </li>
             </ul>
-          </div>
-        </div>
+          </CardContent>
+        </Card>
       )}
     </div>
   );

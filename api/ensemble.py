@@ -3,20 +3,48 @@
 Voting ensemble strategies for combining predictions from multiple models.
 
 Supports: hard_voting, soft_voting, weighted_voting.
+
+UNCERTAIN handling:
+- Models returning label="UNCERTAIN" are EXCLUDED from voting.
+- If ALL models return UNCERTAIN → ensemble result is also UNCERTAIN.
+- Tracked in result["excluded"] for transparency.
 """
 
 from __future__ import annotations
+
+
+def _is_certain(pred: dict) -> bool:
+    """Check if prediction has a definitive label (not UNCERTAIN)."""
+    return pred.get("label") in ("FAKE", "REAL")
+
+
+def _all_uncertain_result(predictions: list[dict], strategy: str) -> dict:
+    """Return a fallback result when all models returned UNCERTAIN."""
+    excluded = [p["model"] for p in predictions]
+    return {
+        "label": "UNCERTAIN",
+        "confidence": 0.0,
+        "strategy": strategy,
+        "votes": {"FAKE": 0, "REAL": 0, "UNCERTAIN": len(predictions)},
+        "excluded": excluded,
+    }
 
 
 def hard_voting(predictions: list[dict]) -> dict:
     """
     Majority label voting.
 
-    Uses only labels (ignores probability). On a tie (e.g. 2 models, 1:1),
-    picks the label with the higher probability among those that have it.
+    UNCERTAIN predictions are excluded from the vote.
+    On a tie, picks label with higher max probability.
     """
+    certain = [p for p in predictions if _is_certain(p)]
+    excluded_uncertain = [p["model"] for p in predictions if not _is_certain(p)]
+
+    if not certain:
+        return _all_uncertain_result(predictions, "hard_voting")
+
     votes = {"FAKE": 0, "REAL": 0}
-    for p in predictions:
+    for p in certain:
         votes[p["label"]] += 1
 
     if votes["FAKE"] > votes["REAL"]:
@@ -25,23 +53,23 @@ def hard_voting(predictions: list[dict]) -> dict:
         label = "REAL"
     else:
         # Tie — pick label with higher probability
-        fake_probs = [p.get("probability") for p in predictions
+        fake_probs = [p.get("probability") for p in certain
                       if p["label"] == "FAKE" and p.get("probability") is not None]
-        real_probs = [p.get("probability") for p in predictions
+        real_probs = [p.get("probability") for p in certain
                       if p["label"] == "REAL" and p.get("probability") is not None]
         fake_max = max(fake_probs) if fake_probs else 0.0
         real_max = max(real_probs) if real_probs else 0.0
         label = "FAKE" if fake_max >= real_max else "REAL"
 
-    # Confidence = fraction of votes for the winning label
-    confidence = votes[label] / len(predictions)
+    # Confidence = fraction of votes for winning label among CERTAIN predictions
+    confidence = votes[label] / len(certain)
 
     return {
         "label": label,
         "confidence": round(confidence, 4),
         "strategy": "hard_voting",
-        "votes": votes,
-        "excluded": [],
+        "votes": {**votes, "UNCERTAIN": len(excluded_uncertain)},
+        "excluded": excluded_uncertain,
     }
 
 
@@ -49,33 +77,38 @@ def soft_voting(predictions: list[dict]) -> dict:
     """
     Average probabilities of models that provide them.
 
-    Models with probability=None are excluded from averaging.
-    If only 1 model remains, return its result directly.
+    Exclusions:
+    - UNCERTAIN predictions (by label)
+    - Predictions with probability=None
     """
     excluded = []
     valid = []
     for p in predictions:
-        if p.get("probability") is not None:
-            valid.append(p)
-        else:
+        if not _is_certain(p):
             excluded.append(p["model"])
+        elif p.get("probability") is None:
+            excluded.append(p["model"])
+        else:
+            valid.append(p)
 
     if not valid:
-        # Fallback to hard voting if no model has probability
-        result = hard_voting(predictions)
-        result["strategy"] = "soft_voting"
-        result["excluded"] = excluded
-        return result
+        # No usable predictions — fallback
+        if any(_is_certain(p) for p in predictions):
+            # Some are certain but lack probability — use hard voting among those
+            result = hard_voting(predictions)
+            result["strategy"] = "soft_voting"
+            result["excluded"] = excluded
+            return result
+        return _all_uncertain_result(predictions, "soft_voting")
 
     if len(valid) == 1:
         p = valid[0]
         prob = p["probability"]
         return {
             "label": p["label"],
-            "confidence": round(float(prob), 4),
+            "confidence": round(float(prob) if p["label"] == "FAKE" else 1.0 - float(prob), 4),
             "strategy": "soft_voting",
-            "votes": {"FAKE": sum(1 for x in predictions if x["label"] == "FAKE"),
-                      "REAL": sum(1 for x in predictions if x["label"] == "REAL")},
+            "votes": _count_votes(predictions),
             "excluded": excluded,
         }
 
@@ -88,8 +121,7 @@ def soft_voting(predictions: list[dict]) -> dict:
         "label": label,
         "confidence": round(float(confidence), 4),
         "strategy": "soft_voting",
-        "votes": {"FAKE": sum(1 for x in predictions if x["label"] == "FAKE"),
-                  "REAL": sum(1 for x in predictions if x["label"] == "REAL")},
+        "votes": _count_votes(predictions),
         "excluded": excluded,
     }
 
@@ -98,22 +130,26 @@ def weighted_voting(predictions: list[dict], weights: dict[str, float]) -> dict:
     """
     Weighted sum of probabilities.
 
-    weights: {"nb": 0.3, "deberta": 0.5, "llm": 0.2}
-    Models with probability=None are excluded; weights are renormalized.
+    Excludes UNCERTAIN predictions and those without probability.
+    Weights are renormalized among remaining models.
     """
     excluded = []
     valid = []
     for p in predictions:
-        if p.get("probability") is not None:
-            valid.append(p)
-        else:
+        if not _is_certain(p):
             excluded.append(p["model"])
+        elif p.get("probability") is None:
+            excluded.append(p["model"])
+        else:
+            valid.append(p)
 
     if not valid:
-        result = hard_voting(predictions)
-        result["strategy"] = "weighted_voting"
-        result["excluded"] = excluded
-        return result
+        if any(_is_certain(p) for p in predictions):
+            result = hard_voting(predictions)
+            result["strategy"] = "weighted_voting"
+            result["excluded"] = excluded
+            return result
+        return _all_uncertain_result(predictions, "weighted_voting")
 
     # Renormalize weights for valid models only
     raw_weights = {p["model"]: weights.get(p["model"], 1.0) for p in valid}
@@ -132,10 +168,20 @@ def weighted_voting(predictions: list[dict], weights: dict[str, float]) -> dict:
         "label": label,
         "confidence": round(float(confidence), 4),
         "strategy": "weighted_voting",
-        "votes": {"FAKE": sum(1 for x in predictions if x["label"] == "FAKE"),
-                  "REAL": sum(1 for x in predictions if x["label"] == "REAL")},
+        "votes": _count_votes(predictions),
         "excluded": excluded,
     }
+
+
+def _count_votes(predictions: list[dict]) -> dict:
+    """Count label distribution including UNCERTAIN bucket."""
+    counts = {"FAKE": 0, "REAL": 0, "UNCERTAIN": 0}
+    for p in predictions:
+        label = p.get("label", "UNCERTAIN")
+        if label not in counts:
+            label = "UNCERTAIN"
+        counts[label] += 1
+    return counts
 
 
 def apply_voting(

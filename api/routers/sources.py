@@ -25,6 +25,7 @@ from api.sources import (
     get_all_sources,
     get_source,
 )
+from api.sources.cross_platform import verify_news
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +43,32 @@ class SourceSearchResponse(BaseModel):
 class FetchUrlRequest(BaseModel):
     url: str  # не HttpUrl — щоб не падати при неочікуваних схемах
 
+
+class VerifyNewsRequest(BaseModel):
+    """Запит на крос-платформну верифікацію новини."""
+    post_id: Optional[str] = None       # якщо вже є id існуючого поста
+    url: Optional[str] = None           # або URL для fetch
+    text: Optional[str] = None          # або просто текст
+    title: Optional[str] = None         # заголовок (для RSS)
+    social_sources: list[str] = ["bluesky", "mastodon"]
+    limit_per_source: int = 10
+
+
+class VerifyNewsResponse(BaseModel):
+    original: dict
+    query_used: str
+    related_posts: list[dict]
+    stats: dict
+    signals: list[dict]
+
+class PostDetailsResponse(BaseModel):
+    post: dict
+    replies: list[dict]
+    reposted_by: list[dict]
+    liked_by: list[dict]
+    quoted_by: list[dict]
+    stats: Optional[dict] = None
+    fetched_limits: Optional[dict] = None
 
 # ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -214,3 +241,139 @@ async def fetch_by_url(
         status_code=404,
         detail="Не вдалося знайти джерело для цього URL або пост відсутній",
     )
+
+
+@router.post("/verify-news", response_model=VerifyNewsResponse)
+async def verify_news_endpoint(
+    req: VerifyNewsRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Крос-платформна верифікація новини.
+
+    Приймає новину (за URL, текстом або id) і шукає згадки/обговорення
+    у соцмережах (Bluesky, Mastodon). Повертає related posts, статистику
+    та сигнали довіри/підозрілості.
+    """
+    # Побудувати NewsItem з вхідних даних
+    if req.url:
+        # Спробувати fetch за URL
+        all_sources = get_all_sources()
+        ordered_sources = sorted(
+            all_sources,
+            key=lambda s: 0 if s.source_name != "rss" else 1,
+        )
+        news_item = None
+        for src in ordered_sources:
+            if not src.can_handle_url(req.url):
+                continue
+            try:
+                news_item = await src.fetch_by_url(req.url)
+                if news_item:
+                    break
+            except SourceError:
+                continue
+
+        if not news_item:
+            # Fallback: створити мінімальний NewsItem з URL і тексту
+            news_item = NewsItem(
+                id="manual:url",
+                source="manual",
+                url=req.url,
+                text=req.text or req.url,
+                title=req.title,
+            )
+    elif req.title:
+        news_item = NewsItem(
+            id="manual:title",
+            source="manual",
+            url="",
+            text=req.title,
+            title=req.title,
+        )
+    elif req.text:
+        news_item = NewsItem(
+            id="manual:text",
+            source="manual",
+            url="",
+            text=req.text,
+            title=req.title,
+        )
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail="Потрібно вказати url, title або text для верифікації",
+        )
+
+    # Валідація social_sources
+    valid_social = {"bluesky", "mastodon"}
+    social = [s for s in req.social_sources if s in valid_social]
+    if not social:
+        social = ["bluesky", "mastodon"]
+
+    result = await verify_news(
+        news_item=news_item,
+        social_sources=social,
+        limit_per_source=req.limit_per_source,
+    )
+
+    return VerifyNewsResponse(**result)
+
+# ── GET /sources/post-details ────────────────────────────────────────────
+
+@router.get("/post-details", response_model=PostDetailsResponse)
+async def get_post_details_endpoint(
+    post_id: str = Query(..., description='Post ID like "bluesky:at://..." or "mastodon:12345" or a URL'),
+    max_replies: int = Query(50, ge=1, le=200),
+    max_likers: int = Query(100, ge=1, le=300),
+    max_reposters: int = Query(100, ge=1, le=300),
+    _: User = Depends(get_current_user),
+):
+    """
+    Return full details for a single post:
+    - replies (with author profiles)
+    - reposted_by (profiles of users who reposted)
+    - liked_by (profiles of users who liked)
+    - quoted_by (Bluesky only; Mastodon returns empty)
+    - stats (aggregated analysis of all participants)
+    - fetched_limits (what was actually fetched vs total)
+
+    Accepts multiple ID formats:
+      - "bluesky:at://did:plc:.../app.bsky.feed.post/rkey"
+      - "at://did:plc:.../app.bsky.feed.post/rkey"
+      - "https://bsky.app/profile/handle/post/rkey"
+      - "mastodon:12345"
+      - "12345" (Mastodon numeric ID)
+      - "https://mastodon.social/@user/12345"
+    """
+    # Try each source until one handles this post_id
+    details = None
+    last_err = None
+
+    for src in get_all_sources():
+        try:
+            result = await src.get_post_details(
+                post_id,
+                max_replies=max_replies,
+                max_likers=max_likers,
+                max_reposters=max_reposters,
+            )
+            if result:
+                details = result
+                break
+        except SourceError as e:
+            last_err = e
+            logger.warning(f"{src.source_name} post-details failed: {e}")
+            continue
+        except Exception as e:
+            last_err = e
+            logger.warning(f"{src.source_name} post-details unexpected: {e}")
+            continue
+
+    if not details:
+        msg = f"Could not fetch details for post_id={post_id}"
+        if last_err:
+            msg += f" (last error: {last_err})"
+        raise HTTPException(status_code=404, detail=msg)
+
+    return PostDetailsResponse(**details.to_dict())

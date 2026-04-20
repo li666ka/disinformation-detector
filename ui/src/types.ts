@@ -557,6 +557,82 @@ export interface UserProfile {
   followers_following_ratio?: number | null;
 }
 
+// ── Claim Verification ─────────────────────────────────────────────────
+
+export interface Claim {
+  text: string;
+  claim_type: "statement" | "causal" | "statistical" | "quote";
+  entities: string[];
+  verifiable: boolean;
+  original_text?: string | null;
+}
+
+export type EvidenceStance = "supports" | "refutes" | "unrelated" | "unknown";
+
+export interface Evidence {
+  source_type: "rss" | "bluesky" | "mastodon";
+  source_name: string;
+  title?: string | null;
+  text: string;
+  url?: string | null;
+  published_at?: string | null;
+  author?: string | null;
+  author_verified?: boolean | null;
+  author_followers_count?: number | null;
+
+  stance?: EvidenceStance | null;
+  stance_confidence?: number | null;
+  stance_reasoning?: string | null;
+  authority_weight?: number | null;
+}
+
+export interface EvidenceBundle {
+  claim: Claim;
+  rss_evidence: Evidence[];
+  social_evidence: Evidence[];
+  total_found: number;
+  retrieval_time_seconds: number;
+  query_used?: string | null;
+}
+
+export interface EvidenceBreakdown {
+  supports: number;
+  refutes: number;
+  unrelated: number;
+  unknown: number;
+  weighted_supports: number;
+  weighted_refutes: number;
+}
+
+export interface Verdict {
+  label: "FAKE" | "REAL" | "UNCERTAIN";
+  confidence: number;
+  reasoning: string;
+  breakdown: EvidenceBreakdown;
+  evidence_count: number;
+  highest_authority_evidence?: Evidence | null;
+  model_used?: string | null;
+  verdict_time_seconds: number;
+}
+
+export interface VerificationResult {
+  original_text: string;
+  claims: Claim[];
+  evidence_bundles: EvidenceBundle[];
+  verdicts: Verdict[];
+  overall_verdict?: Verdict | null;
+  total_time_seconds: number;
+}
+
+export interface VerifyRequest {
+  text: string;
+  max_claims?: number;
+  limit_rss?: number;
+  limit_social?: number;
+  sources?: string[];
+  use_llm_verdict?: boolean;
+}
+
 // ── Reply (post response with full author profile) ──────────────────────
 
 export interface Reply {

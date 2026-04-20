@@ -10,6 +10,7 @@ import SourcesPage from "./SourcesPage";
 import DatasetsPage from "./DatasetsPage";
 import LLMPresetsPage from "./LLMPresetsPage";
 import VerifyPage from "./VerifyPage";
+import VerificationPage from "./VerificationPage";
 import api from "./api";
 import { useTheme } from "./ThemeProvider";
 import { cn } from "./lib/utils";
@@ -50,8 +51,9 @@ const FEATURE_GROUP_DEFS: Record<string, string[]> = {
 const NAV_ITEMS = [
   { icon: Brain, label: "Навчання моделі", tab: "training" },
   { icon: FileText, label: "Аналіз тексту", tab: "prediction" },
+  { icon: ShieldCheck, label: "Верифікація", tab: "verification" },
   { icon: Globe, label: "Реальні дані", tab: "sources" },
-  { icon: ShieldCheck, label: "Cross-verify", tab: "verify" },
+  { icon: Crosshair, label: "Cross-verify", tab: "verify" },
   { icon: Database, label: "Датасети", tab: "datasets" },
   { icon: Sparkles, label: "LLM пресети", tab: "llm-presets" },
   { icon: BarChart3, label: "Експерименти", tab: "experiments" },
@@ -549,6 +551,7 @@ function App() {
           )}
 
           {activeTab === "prediction" && <AnalysisPage />}
+          {activeTab === "verification" && <VerificationPage />}
           {activeTab === "sources" && <SourcesPage />}
           {activeTab === "verify" && <VerifyPage />}
           {activeTab === "datasets" && <DatasetsPage />}

@@ -110,7 +110,7 @@ def _build_user_prompt_cot(text: str, cot_instruction: str) -> str:
     return f"{cot_instruction}\n\nText to classify:\n\n{text[:2000]}"
 
 
-def _call_gemini(
+def _call_gemini_raw(
     client,
     types,
     *,
@@ -119,8 +119,12 @@ def _call_gemini(
     user_prompt: str,
     temperature: float,
     max_output_tokens: int,
-) -> tuple[dict, str]:
-    """One Gemini call with fallback. Returns (parsed_result, model_used)."""
+) -> tuple[str, str]:
+    """One Gemini call with fallback. Returns (raw_text, model_used).
+
+    Unlike _call_gemini, does NOT parse the response — returns the raw text
+    so callers (claim extraction, stance detection, etc.) can parse it themselves.
+    """
     chain = FALLBACK_CHAIN.get(base_model, [DEFAULT_BASE_MODEL])
 
     for model_id in chain:
@@ -138,7 +142,7 @@ def _call_gemini(
                 if not response or not response.text:
                     logger.warning(f"{model_id}: empty response")
                     break
-                return _parse_response(response.text.strip()), model_id
+                return response.text.strip(), model_id
             except Exception as e:
                 err = str(e)
                 if "429" in err or "RESOURCE_EXHAUSTED" in err or "quota" in err.lower():
@@ -157,10 +161,34 @@ def _call_gemini(
                     logger.warning(f"{model_id}: unexpected error: {e}")
                     break
 
-    return (
-        {"label": "UNCERTAIN", "confidence": 0.5, "reason": "all_models_exhausted"},
-        "none",
+    return "", "none"
+
+
+def _call_gemini(
+    client,
+    types,
+    *,
+    base_model: str,
+    system_prompt: str,
+    user_prompt: str,
+    temperature: float,
+    max_output_tokens: int,
+) -> tuple[dict, str]:
+    """One Gemini call with fallback. Returns (parsed_result, model_used)."""
+    raw_text, model_used = _call_gemini_raw(
+        client, types,
+        base_model=base_model,
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+        temperature=temperature,
+        max_output_tokens=max_output_tokens,
     )
+    if not raw_text:
+        return (
+            {"label": "UNCERTAIN", "confidence": 0.5, "reason": "all_models_exhausted"},
+            model_used,
+        )
+    return _parse_response(raw_text), model_used
 
 
 # Backward-compat alias for /evaluate endpoint which calls _call_with_fallback

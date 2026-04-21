@@ -28,3 +28,4 @@ frontend/build/
 Thumbs.db
 
 synthetic_generator/output/
+uploaded_datasets/

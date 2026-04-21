@@ -1,5 +1,5 @@
 // ui/src/VerificationPage.tsx
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import api from "./api";
 import { Button } from "./components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "./components/ui/card";
@@ -26,8 +26,18 @@ const EXAMPLE_TEXTS = [
     "Breaking: Ukraine received Patriot missile systems from US allies.",
 ];
 
-export default function VerificationPage() {
-    const [text, setText] = useState("");
+interface VerificationPageProps {
+    initialText?: string;
+}
+
+export default function VerificationPage({ initialText = "" }: VerificationPageProps = {}) {
+    const [text, setText] = useState(initialText);
+
+    useEffect(() => {
+        if (initialText) {
+            setText(initialText);
+        }
+    }, [initialText]);
     const [loading, setLoading] = useState(false);
     const [useLlm, setUseLlm] = useState(true);
     const [result, setResult] = useState<VerificationResult | null>(null);

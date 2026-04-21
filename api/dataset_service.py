@@ -1,7 +1,7 @@
 """
 Dataset service — handles ZIP upload, validation, storage, and statistics.
 
-ZIP must contain at least `news.csv` with columns (news_id, text, label).
+ZIP must contain at least `news.csv` with columns (article_id, article_text, article_label).
 Optionally may contain: tweets.csv, retweets.csv, replies.csv, likes.csv,
 users.csv, evidence.csv with appropriate columns and FK references.
 """
@@ -38,14 +38,16 @@ ALL_FILES = REQUIRED_FILES + OPTIONAL_FILES
 
 # Required columns for each file
 REQUIRED_COLUMNS = {
-    "news.csv":     ["news_id", "text", "label"],
-    "tweets.csv":   ["tweet_id", "news_id"],
-    "retweets.csv": ["tweet_id", "user_id"],
-    "replies.csv":  ["reply_id", "tweet_id"],
+    "news.csv":     ["article_id", "article_text", "article_label"],
+    "tweets.csv":   ["tweet_id", "article_id"],
+    "retweets.csv": ["original_tweet_id", "user_id"],
+    "replies.csv":  ["reply_id", "parent_tweet_id"],
     "likes.csv":    ["tweet_id", "user_id"],
     "users.csv":    ["user_id"],
-    "evidence.csv": ["news_id"],
+    "evidence.csv": ["article_id"],
 }
+
+VALID_LABELS = {"FAKE", "REAL"}
 
 # Safe filename pattern (prevent path traversal)
 SAFE_FILENAME_RE = re.compile(r"^[a-zA-Z0-9_.-]+$")
@@ -164,53 +166,50 @@ def validate_csv_schemas(zf: zipfile.ZipFile, found: dict[str, str]) -> tuple[di
             f"news.csv має {len(news_df)} рядків — максимум {MAX_NEWS_ROWS}"
         )
 
-    # Validate label column: must be 0, 1, or NaN
-    if "label" in news_df.columns:
+    # Validate article_label column: must be FAKE, REAL, or empty
+    if "article_label" in news_df.columns:
         def check_label(v):
             if pd.isna(v) or v == "":
                 return True
-            try:
-                return int(v) in (0, 1)
-            except (ValueError, TypeError):
-                return False
+            return str(v).strip().upper() in VALID_LABELS
 
-        invalid_labels = news_df[~news_df["label"].apply(check_label)]
+        invalid_labels = news_df[~news_df["article_label"].apply(check_label)]
         if len(invalid_labels) > 0:
-            examples = invalid_labels["label"].head(3).tolist()
+            examples = invalid_labels["article_label"].head(3).tolist()
             raise DatasetValidationError(
-                f"У news.csv знайдено {len(invalid_labels)} рядків з невалідним label. "
-                f"Приклади: {examples}. Допустимі значення: 0, 1, або порожньо."
+                f"У news.csv знайдено {len(invalid_labels)} рядків з невалідним article_label. "
+                f"Приклади: {examples}. Допустимі значення: FAKE, REAL, або порожньо."
             )
 
-    # Check duplicate news_id
-    if news_df["news_id"].duplicated().any():
-        dupes = news_df["news_id"].duplicated().sum()
-        warnings.append(f"news.csv має {dupes} дублікатів news_id")
+    # Check duplicate article_id
+    if news_df["article_id"].duplicated().any():
+        dupes = news_df["article_id"].duplicated().sum()
+        warnings.append(f"news.csv має {dupes} дублікатів article_id")
 
-    # Check empty texts
-    empty_texts = news_df["text"].apply(lambda x: not str(x).strip()).sum()
+    # Check empty article_text
+    empty_texts = news_df["article_text"].apply(lambda x: not str(x).strip()).sum()
     if empty_texts > 0:
-        warnings.append(f"news.csv має {empty_texts} рядків з порожнім текстом")
+        warnings.append(f"news.csv має {empty_texts} рядків з порожнім article_text")
 
     # Validate FK relationships if tweets.csv is present
     if "tweets.csv" in dataframes:
-        news_ids = set(news_df["news_id"].astype(str))
+        article_ids = set(news_df["article_id"].astype(str))
         tweets_df = dataframes["tweets.csv"]
-        orphan_tweets = tweets_df[~tweets_df["news_id"].astype(str).isin(news_ids)]
+        orphan_tweets = tweets_df[~tweets_df["article_id"].astype(str).isin(article_ids)]
         if len(orphan_tweets) > 0:
             warnings.append(
-                f"tweets.csv має {len(orphan_tweets)} рядків з news_id, якого немає в news.csv"
+                f"tweets.csv має {len(orphan_tweets)} рядків з article_id, якого немає в news.csv"
             )
 
     # Validate FK: replies → tweets
     if "replies.csv" in dataframes and "tweets.csv" in dataframes:
         tweet_ids = set(dataframes["tweets.csv"]["tweet_id"].astype(str))
         orphan_replies = dataframes["replies.csv"][
-            ~dataframes["replies.csv"]["tweet_id"].astype(str).isin(tweet_ids)
+            ~dataframes["replies.csv"]["parent_tweet_id"].astype(str).isin(tweet_ids)
         ]
         if len(orphan_replies) > 0:
             warnings.append(
-                f"replies.csv має {len(orphan_replies)} рядків з невідомим tweet_id"
+                f"replies.csv має {len(orphan_replies)} рядків з невідомим parent_tweet_id"
             )
 
     return dataframes, warnings
@@ -283,20 +282,17 @@ def compute_basic_stats(news_df: pd.DataFrame) -> dict:
     real = 0
     unlabeled = 0
 
-    for v in news_df["label"]:
+    for v in news_df["article_label"]:
         if pd.isna(v) or v == "":
             unlabeled += 1
+            continue
+        label = str(v).strip().upper()
+        if label == "FAKE":
+            fake += 1
+        elif label == "REAL":
+            real += 1
         else:
-            try:
-                iv = int(v)
-                if iv == 1:
-                    fake += 1
-                elif iv == 0:
-                    real += 1
-                else:
-                    unlabeled += 1
-            except (ValueError, TypeError):
-                unlabeled += 1
+            unlabeled += 1
 
     return {
         "total": total,
@@ -321,7 +317,7 @@ def get_preview(dataframes: dict[str, pd.DataFrame], n_rows: int = 5) -> dict:
                 item[col] = None
             else:
                 str_val = str(val)
-                if col == "text" and len(str_val) > 200:
+                if col == "article_text" and len(str_val) > 200:
                     str_val = str_val[:200] + "…"
                 item[col] = str_val
         news_head.append(item)
@@ -359,7 +355,7 @@ def compute_detailed_stats(folder_path: str) -> dict:
     result["unlabeled_count"] = basic["unlabeled"]
 
     # Text length stats
-    text_lens = news_df["text"].fillna("").astype(str).str.len()
+    text_lens = news_df["article_text"].fillna("").astype(str).str.len()
     result["text_length_stats"] = {
         "min": int(text_lens.min()) if len(text_lens) else 0,
         "median": float(text_lens.median()) if len(text_lens) else 0,
@@ -368,7 +364,7 @@ def compute_detailed_stats(folder_path: str) -> dict:
         "p95": float(text_lens.quantile(0.95)) if len(text_lens) else 0,
     }
     result["empty_text_count"] = int((text_lens == 0).sum())
-    result["duplicate_text_count"] = int(news_df["text"].duplicated().sum())
+    result["duplicate_text_count"] = int(news_df["article_text"].duplicated().sum())
 
     # Top domains (if domain column present)
     top_domains = []
@@ -385,10 +381,10 @@ def compute_detailed_stats(folder_path: str) -> dict:
     if tweets_path.exists():
         tweets_df = pd.read_csv(tweets_path, dtype=str, keep_default_na=False, na_values=[""])
         result["total_tweets"] = int(len(tweets_df))
-        if len(tweets_df) > 0 and "news_id" in tweets_df.columns:
-            tweets_per_news = tweets_df.groupby("news_id").size()
+        if len(tweets_df) > 0 and "article_id" in tweets_df.columns:
+            tweets_per_news = tweets_df.groupby("article_id").size()
             result["avg_tweets_per_news"] = float(tweets_per_news.mean())
-            news_with_tweets = tweets_df["news_id"].nunique()
+            news_with_tweets = tweets_df["article_id"].nunique()
             if basic["total"] > 0:
                 result["news_with_tweets_pct"] = float(news_with_tweets / basic["total"] * 100)
 

@@ -5,7 +5,7 @@ import { Button } from "./components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "./components/ui/card";
 import { Textarea } from "./components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./components/ui/select";
-import { AlertTriangle, CheckCircle2, Loader2 } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Loader2, Search } from "lucide-react";
 import { toast } from "sonner";
 import type { ModelRecord } from "./types";
 
@@ -15,7 +15,11 @@ interface AnalyzeResult {
   probability: number;
 }
 
-export default function AnalysisPage() {
+interface AnalysisPageProps {
+  onDeepCheckRequest?: (text: string) => void;
+}
+
+export default function AnalysisPage({ onDeepCheckRequest }: AnalysisPageProps = {}) {
   const [models, setModels] = useState<ModelRecord[]>([]);
   const [modelId, setModelId] = useState<number | null>(null);
   const [text, setText] = useState<string>("");
@@ -130,27 +134,61 @@ export default function AnalysisPage() {
 
       {/* Verdict */}
       {result && (
-        <Card className={cn(
-          "border-2",
-          isFake ? "border-red-500 bg-red-50 dark:bg-red-950/20" : "border-green-500 bg-green-50 dark:bg-green-950/20",
-        )}>
-          <CardContent className="py-8 text-center">
-            {isFake ? (
-              <AlertTriangle className="h-12 w-12 text-red-500 mx-auto mb-3" />
-            ) : (
-              <CheckCircle2 className="h-12 w-12 text-green-500 mx-auto mb-3" />
-            )}
-            <h2 className={cn(
-              "text-3xl font-bold",
-              isFake ? "text-red-600 dark:text-red-400" : "text-green-600 dark:text-green-400"
-            )}>
-              {isFake ? "ДЕЗІНФОРМАЦІЯ" : "ДОСТОВІРНО"}
-            </h2>
-            <p className="text-muted-foreground mt-2">
-              Впевненість: {(result.confidence * 100).toFixed(1)}%
-            </p>
-          </CardContent>
-        </Card>
+        <>
+          <Card className={cn(
+            "border-2",
+            isFake ? "border-red-500 bg-red-50 dark:bg-red-950/20" : "border-green-500 bg-green-50 dark:bg-green-950/20",
+          )}>
+            <CardContent className="py-8 text-center">
+              {isFake ? (
+                <AlertTriangle className="h-12 w-12 text-red-500 mx-auto mb-3" />
+              ) : (
+                <CheckCircle2 className="h-12 w-12 text-green-500 mx-auto mb-3" />
+              )}
+              <h2 className={cn(
+                "text-3xl font-bold",
+                isFake ? "text-red-600 dark:text-red-400" : "text-green-600 dark:text-green-400"
+              )}>
+                {isFake ? "ДЕЗІНФОРМАЦІЯ" : "ДОСТОВІРНО"}
+              </h2>
+              <p className="text-muted-foreground mt-2">
+                Впевненість: {(result.confidence * 100).toFixed(1)}%
+              </p>
+            </CardContent>
+          </Card>
+
+          <Card className="border-dashed">
+            <CardContent className="py-4">
+              <div className="flex items-start gap-3">
+                <Search className="h-5 w-5 text-muted-foreground shrink-0 mt-0.5" />
+                <div className="flex-1 space-y-2">
+                  <p className="text-sm font-medium">
+                    Потрібна детальніша перевірка?
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    Запустити multi-hop верифікацію: витягування тверджень, пошук доказів
+                    у новинах та соцмережах, аналіз консистентності.
+                  </p>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      if (onDeepCheckRequest) {
+                        onDeepCheckRequest(text);
+                      } else {
+                        navigator.clipboard.writeText(text);
+                        toast.info("Текст скопійовано. Вставте у вкладці 'Верифікація'.");
+                      }
+                    }}
+                  >
+                    <Search className="mr-2 h-4 w-4" />
+                    Перевірити детальніше →
+                  </Button>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        </>
       )}
 
       {/* Details */}

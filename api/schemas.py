@@ -164,6 +164,7 @@ class NBConfig(BaseModel):
     variant: str = "multinomial"
     vectorizer: str = "tfidf"
     ngram_range: str = "1,1"
+    alpha: str = "1.0"
     additional_features: Optional[AdditionalFeatures] = None
 
 

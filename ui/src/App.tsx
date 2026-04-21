@@ -132,6 +132,7 @@ function App() {
   const { theme, setTheme } = useTheme();
 
   const [activeTab, setActiveTab] = useState<string>("training");
+  const [prefilledVerifyText, setPrefilledVerifyText] = useState<string>("");
 
   // ── Training state ─────────────────────────────────────────────────────
   const [wizardConfig, setWizardConfig] = useState<TrainRequest | null>(null);
@@ -265,19 +266,21 @@ function App() {
             const Icon = item.icon;
             const isActive = activeTab === item.tab;
             return (
-              <button
-                key={item.tab}
-                onClick={() => setActiveTab(item.tab)}
-                className={cn(
-                  "flex items-center gap-3 w-full rounded-md px-3 py-2 text-sm font-medium transition-colors",
-                  isActive
-                    ? "bg-primary/10 text-primary"
-                    : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-                )}
-              >
-                <Icon className="h-4 w-4 shrink-0" />
-                {item.label}
-              </button>
+              <React.Fragment key={item.tab}>
+                {item.tab === "datasets" && <Separator className="my-3" />}
+                <button
+                  onClick={() => setActiveTab(item.tab)}
+                  className={cn(
+                    "flex items-center gap-3 w-full rounded-md px-3 py-2 text-sm font-medium transition-colors",
+                    isActive
+                      ? "bg-primary/10 text-primary"
+                      : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+                  )}
+                >
+                  <Icon className="h-4 w-4 shrink-0" />
+                  {item.label}
+                </button>
+              </React.Fragment>
             );
           })}
           <Separator className="my-3" />
@@ -550,8 +553,15 @@ function App() {
             </div>
           )}
 
-          {activeTab === "prediction" && <AnalysisPage />}
-          {activeTab === "verification" && <VerificationPage />}
+          {activeTab === "prediction" && (
+            <AnalysisPage
+              onDeepCheckRequest={(text) => {
+                setPrefilledVerifyText(text);
+                setActiveTab("verification");
+              }}
+            />
+          )}
+          {activeTab === "verification" && <VerificationPage initialText={prefilledVerifyText} />}
           {activeTab === "sources" && <SourcesPage />}
           {activeTab === "verify" && <VerifyPage />}
           {activeTab === "datasets" && <DatasetsPage />}

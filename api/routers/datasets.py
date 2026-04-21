@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session
 
 from api.database import get_db, Dataset, User
 from api.auth import get_current_user
+from api.colab_sync import ensure_dataset_on_colab, ColabSyncError
 from api.dataset_service import (
     validate_zip_structure,
     validate_csv_schemas,
@@ -216,15 +217,15 @@ def download_template(_: User = Depends(get_current_user)):
 
     # Build minimal example CSVs in memory
     news = pd.DataFrame([
-        {"news_id": "news_001", "text": "Scientists discover water on Mars.", "label": 0,
+        {"article_id": "article_001", "article_text": "Scientists discover water on Mars.", "article_label": "REAL",
          "title": "Mars Water Found", "url": "https://example.com/mars", "domain": "example.com"},
-        {"news_id": "news_002", "text": "Celebrity secretly marries alien, report claims.", "label": 1,
+        {"article_id": "article_002", "article_text": "Celebrity secretly marries alien, report claims.", "article_label": "FAKE",
          "title": "Alien Wedding", "url": "https://tabloid.com/alien", "domain": "tabloid.com"},
     ])
     tweets = pd.DataFrame([
-        {"tweet_id": "t1", "news_id": "news_001", "text": "Amazing discovery!",
+        {"tweet_id": "t1", "article_id": "article_001", "text": "Amazing discovery!",
          "user_id": "u1", "favourite_count": 10, "retweet_count": 3, "reply_count": 1},
-        {"tweet_id": "t2", "news_id": "news_002", "text": "This is fake!",
+        {"tweet_id": "t2", "article_id": "article_002", "text": "This is fake!",
          "user_id": "u2", "favourite_count": 5, "retweet_count": 0, "reply_count": 2},
     ])
     users = pd.DataFrame([
@@ -247,19 +248,19 @@ def download_template(_: User = Depends(get_current_user)):
         readme = """Шаблон датасету для fake news detection
 
 ОБОВ'ЯЗКОВИЙ ФАЙЛ:
-  news.csv — колонки: news_id, text, label
-    - news_id: унікальний ID (рядок)
-    - text: текст новини
-    - label: 0 = REAL, 1 = FAKE, порожньо = нерозмічено
+  news.csv — колонки: article_id, article_text, article_label
+    - article_id: унікальний ID (рядок)
+    - article_text: текст новини
+    - article_label: REAL, FAKE, або порожньо = нерозмічено
     - (опц.) title, url, domain, authors, publish_date
 
 ОПЦІОНАЛЬНІ ФАЙЛИ:
-  tweets.csv — tweet_id, news_id (FK), text, user_id (FK), favourite_count, retweet_count, reply_count
-  retweets.csv — tweet_id (FK), user_id (FK)
-  replies.csv — reply_id, tweet_id (FK), parent_reply_id, user_id, text
+  tweets.csv — tweet_id, article_id (FK), text, user_id (FK), favourite_count, retweet_count, reply_count
+  retweets.csv — original_tweet_id (FK), user_id (FK)
+  replies.csv — reply_id, parent_tweet_id (FK), parent_reply_id, user_id, text
   likes.csv — tweet_id (FK), user_id (FK)
   users.csv — user_id, screen_name, followers_count, friends_count, statuses_count, verified, created_at
-  evidence.csv — news_id (FK), url, content
+  evidence.csv — article_id (FK), url, content
 
 Усі CSV мають бути у корені ZIP архіву, або всередині однієї папки.
 """
@@ -275,7 +276,7 @@ def download_template(_: User = Depends(get_current_user)):
 
 # ── POST /datasets/{id}/activate ─────────────────────────────────────────
 
-@router.post("/{dataset_id}/activate", response_model=DatasetResponse)
+@router.post("/{dataset_id}/activate")
 def activate_dataset(
     dataset_id: int,
     db: Session = Depends(get_db),
@@ -298,7 +299,26 @@ def activate_dataset(
     record.is_active = True
     db.commit()
     db.refresh(record)
-    return record
+
+    try:
+        sync_result = ensure_dataset_on_colab(
+            dataset_id=dataset_id,
+            dataset_folder=record.folder_path,
+        )
+        logger.info(f"Colab sync: {sync_result}")
+    except ColabSyncError as e:
+        logger.error(f"Colab sync failed: {e}")
+        return {
+            "ok": True,
+            "activated": True,
+            "colab_sync": {"ok": False, "error": str(e)},
+        }
+
+    return {
+        "ok": True,
+        "activated": True,
+        "colab_sync": sync_result,
+    }
 
 
 # ── PATCH /datasets/{id} ─────────────────────────────────────────────────

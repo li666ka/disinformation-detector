@@ -20,7 +20,7 @@ from api.model import FakeNewsModel
 from api.ensemble import apply_voting
 from api.schemas import (
     PredictRequest as PredictRequestV2,
-    NBConfig, DeBERTaConfig, LLMConfig,
+    NBConfig, DeBERTaConfig, LLMConfig, ModelConfig,
 )
 from api.database import create_tables, get_db, Experiment, ModelRecord, User, Dataset
 from api.auth import get_current_user
@@ -83,7 +83,7 @@ class TrainRequest(BaseModel):
 
     # Старі поля від фронтенду
     mode: str = "single"
-    models: list[dict] = []
+    models: list[ModelConfig] = []
     ensemble: dict | None = None
     preprocessing: dict | None = {}
     
@@ -469,7 +469,7 @@ def train_model(
     # 1. Визначаємо тип моделі (з прямого поля або з масиву models)
     actual_model_type = request.model_type
     if not actual_model_type and request.models and len(request.models) > 0:
-        actual_model_type = request.models[0].get("model")
+        actual_model_type = request.models[0].model
 
     if not actual_model_type:
         raise HTTPException(status_code=400, detail="Не вказано тип моделі для тренування")
@@ -477,7 +477,7 @@ def train_model(
     # 2. Формуємо параметри моделі — завжди беремо з models[0] якщо є
     model_params = request.model_params or {}
     if request.models and len(request.models) > 0:
-        from_models = {k: v for k, v in request.models[0].items() if k != "model"}
+        from_models = request.models[0].model_dump(exclude={"model"})
         model_params = {**from_models, **model_params}  # model_params overrides if both set
     logger.info(f"model_params sent to Colab: {model_params}")
 
@@ -504,21 +504,25 @@ def train_model(
     if not active_ds:
         raise HTTPException(
             status_code=400,
-            detail="Немає активного датасету. Завантажте датасет і зробіть його активним.",
+            detail="Немає активного датасету. Активуйте у Datasets page.",
         )
 
-    news_csv_path = os.path.join(active_ds.folder_path, "news.csv")
-    if not os.path.exists(news_csv_path):
+    # 5. Lazy sync — якщо Colab рестартував, re-upload
+    from api.colab_sync import ensure_dataset_on_colab, ColabSyncError
+    try:
+        sync_result = ensure_dataset_on_colab(
+            dataset_id=active_ds.id,
+            dataset_folder=active_ds.folder_path,
+        )
+        if not sync_result.get("skipped"):
+            logger.info(f"Re-synced: {sync_result.get('chunks_sent')} chunks")
+    except ColabSyncError as e:
         raise HTTPException(
-            status_code=500,
-            detail=f"news.csv не знайдено у датасеті: {news_csv_path}",
+            status_code=503,
+            detail=f"Не вдалося синхронізувати dataset з Colab: {e}"
         )
 
-    import base64
-    with open(news_csv_path, "rb") as f:
-        news_csv_b64 = base64.b64encode(f.read()).decode("ascii")
-
-    # 5. Готуємо Payload для ML-сервера
+    # 6. Simple payload — no CSV data
     payload = {
         "user_id": current_user.id,
         "experiment_id": request.experiment_id or "default_exp",
@@ -527,46 +531,53 @@ def train_model(
         "preprocessing": request.preprocessing or {},
         "dataset_id": active_ds.id,
         "dataset_name": active_ds.name,
-        "news_csv_b64": news_csv_b64,
     }
-
-    # Optional: send tweets.csv and users.csv for social features
-    if active_ds.has_tweets:
-        tweets_path = os.path.join(active_ds.folder_path, "tweets.csv")
-        if os.path.exists(tweets_path):
-            with open(tweets_path, "rb") as f:
-                payload["tweets_csv_b64"] = base64.b64encode(f.read()).decode("ascii")
-
-    if active_ds.has_users:
-        users_path = os.path.join(active_ds.folder_path, "users.csv")
-        if os.path.exists(users_path):
-            with open(users_path, "rb") as f:
-                payload["users_csv_b64"] = base64.b64encode(f.read()).decode("ascii")
+    print(f"DEBUG: Sending dataset_id={active_ds.id}, name={active_ds.name!r} (no CSV in payload)")
 
     print(f"Відправка на ML-сервер: {target_url}")
 
     try:
+        # DEBUG
+        payload_keys = list(payload.keys())
+        print(f"DEBUG target_url={target_url!r}")
+        print(f"DEBUG payload keys: {payload_keys}")
+        for k, v in payload.items():
+            if isinstance(v, str) and len(v) > 100:
+                print(f"DEBUG payload[{k}] = <str {len(v):,} chars>")
+            else:
+                print(f"DEBUG payload[{k}] = {v!r}")
+        total_size = sum(len(str(v)) if not isinstance(v, (dict, list)) else len(json.dumps(v)) for v in payload.values())
+        print(f"DEBUG total payload size: ~{total_size:,} chars ({total_size/1024/1024:.2f} MB)")
+
         # Встановлюємо великий таймаут (4 години) для GPU-обчислень
         response = requests.post(target_url, json=payload, timeout=14400)
         response.raise_for_status()
         ml_data = response.json()
         logger.info(f"ML response keys: {list(ml_data.keys())}, has top_words: {'top_words' in ml_data}")
-        
-    except requests.exceptions.ConnectionError:
+
+    except requests.exceptions.ConnectionError as e:
+        print(f"DEBUG ConnectionError type: {type(e).__name__}")
+        print(f"DEBUG ConnectionError: {e}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(
-            status_code=503, 
-            detail=f"ML-сервер недоступний за адресою {target_url}. Перевірте тунель або порт."
+            status_code=503,
+            detail=f"ML-сервер: {type(e).__name__}: {str(e)[:300]}"
         )
     except requests.exceptions.Timeout:
-        raise HTTPException(
-            status_code=504, 
-            detail="Час очікування вичерпано. Процес тренування триває у фоновому режимі."
-        )
+        raise HTTPException(status_code=504, detail="Час очікування вичерпано")
     except requests.exceptions.HTTPError:
+        print(f"DEBUG HTTPError, response status: {response.status_code}")
+        print(f"DEBUG response body: {response.text[:500]}")
         raise HTTPException(
             status_code=response.status_code,
-            detail=f"Помилка ML-сервера: {response.text}"
+            detail=f"Помилка ML-сервера: {response.text[:500]}"
         )
+    except Exception as e:
+        print(f"DEBUG Other: {type(e).__name__}: {e}")
+        import traceback
+        traceback.print_exc()
+        raise
 
     # Save experiment to DB
     metrics = ml_data.get("metrics", {})
@@ -592,7 +603,7 @@ def train_model(
         test_size=metrics.get("test_size"),
         training_time=str(metrics.get("training_time", "")),
         status="success",
-        model_configs=json.dumps(request.models) if request.models else None,
+        model_configs=json.dumps([m.model_dump() for m in request.models]) if request.models else None,
     )
     db.add(exp)
 

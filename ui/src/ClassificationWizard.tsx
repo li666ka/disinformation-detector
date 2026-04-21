@@ -109,24 +109,27 @@ function parseLlmPresetConfig(llmConfigJson: string | null | undefined): string 
   }
 }
 
-function buildDefaultMask(allTrue: boolean) {
+function buildDefaultMask(allTrue: boolean, forceGroups: string[] = []) {
   const mask: Record<string, boolean> = {};
   ALL_FEATURE_KEYS.forEach((k) => { mask[k] = allTrue; });
+  forceGroups.forEach((g) => {
+    FEATURE_GROUPS[g]?.features.forEach((f: any) => { mask[f.key] = true; });
+  });
   return mask;
 }
 
 const DEFAULT_PARAMS: any = {
   nb: {
     variant: "multinomial", vectorizer: "tfidf", ngram: "1,1", alpha: "1.0",
-    additional_groups: ["semantic"], feature_mask: buildDefaultMask(true),
+    additional_groups: ["semantic"], feature_mask: buildDefaultMask(false, ["semantic"]),
     preprocessing: {
       removeUrls: true, removeMentions: true, cleaning: true, lowercase: true,
       removePunctuation: true, removeNumbers: false, removeStopwords: true,
       stemming: false, lemmatization: true,
     },
   },
-  deberta: { integration_mode: "concat", additional_groups: ["semantic"], feature_mask: buildDefaultMask(false) },
-  llm: { mode: "single", lang: "auto", additional_groups: ["semantic"], feature_mask: buildDefaultMask(true) },
+  deberta: { integration_mode: "concat", additional_groups: ["semantic"], feature_mask: buildDefaultMask(false, ["semantic"]) },
+  llm: { mode: "single", lang: "auto", additional_groups: ["semantic"], feature_mask: buildDefaultMask(false, ["semantic"]) },
 };
 
 function getDefaultParams(type: string) {
@@ -242,9 +245,10 @@ export default function ClassificationWizard({ trainingMode = false, onConfigCha
       const p = modelParams[type] || getDefaultParams(type);
       const groups = p.additional_groups || [];
       const mask = p.feature_mask || buildDefaultMask(false);
-      const hasFeatures = Object.values(mask).some(Boolean);
+      const hasAnyFeature = Object.values(mask).some(Boolean);
+      const hasGroups = groups.length > 0;
       const model: any = { model: type };
-      if (hasFeatures) { model.additional_features = { groups, mask }; }
+      if (hasGroups || hasAnyFeature) { model.additional_features = { groups, mask }; }
       else { model.additional_features = null; }
       if (type === "nb") {
         model.variant = p.variant || "multinomial";
@@ -646,9 +650,10 @@ export default function ClassificationWizard({ trainingMode = false, onConfigCha
             const p = modelParams[mid] || getDefaultParams(mid);
             const groups = p.additional_groups || [];
             const mask = p.feature_mask || {};
-            const activeCount = groups.length > 0
-              ? Object.entries(mask).filter(([k, v]: any) => v && ALL_FEATURE_KEYS.includes(k)).length
-              : 0;
+            const activeCount = groups.reduce((sum: number, g: string) => {
+              const feats = FEATURE_GROUPS[g]?.features || [];
+              return sum + feats.filter((f: any) => mask[f.key] && f.key !== "text").length;
+            }, 0);
             return (
               <div key={mid} className="pt-2 border-t border-border">
                 <p className="font-semibold text-xs">{MODEL_LABELS[mid] || mid}</p>

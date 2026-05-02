@@ -1,34 +1,55 @@
 # api/llm_predictor.py
 """
-LLM classification via Gemini API — preset-driven.
+LLM classification via Claude Code CLI — preset-driven.
 
-predict_with_preset(text, preset_config) — new preset-based entry point.
-predict(...) — legacy wrapper, kept for backward compat during migration.
+Виклики Claude через subprocess `claude -p` — без API token, через Max plan OAuth.
+ANTHROPIC_API_KEY не повинен бути встановлений у env (інакше біллинг піде на API).
 
-Models (verified April 2026, free tier):
-  gemini-2.5-flash-lite  (15 RPM / 1000 RPD)
-  gemini-2.5-flash       (10 RPM /  250 RPD)
-  gemini-2.5-pro         ( 5 RPM /  100 RPD)
+Models (April 2026):
+  claude-haiku-4-5    — найшвидша, дешева (default)
+  claude-sonnet-4-6   — баланс
+  claude-opus-4-7     — найрозумніша (повільніша)
+
+Public API:
+  predict_with_preset(text, preset_config) — single classification
+  predict_batch_with_preset(texts, preset_config) — BATCH classification (10-15 за раз)
+  predict(...) — legacy wrapper
+
+Low-level (used by claim_extractor / verification pipeline):
+  _call_claude_cli(prompt, model=...) → str  — raw Claude CLI subprocess call.
 """
 import os
 import re
 import json
 import time
 import logging
+import subprocess
 from collections import Counter
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
+# ─────────────────────────────────────────────────────────────────
+# CONSTANTS
+# ─────────────────────────────────────────────────────────────────
 
-DEFAULT_BASE_MODEL = "gemini-2.5-flash-lite"
+DEFAULT_BASE_MODEL = "claude-haiku-4-5"
 
-# Fallback chain: if requested model hits quota, try progressively smaller.
-FALLBACK_CHAIN = {
-    "gemini-2.5-pro":        ["gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite"],
-    "gemini-2.5-flash":      ["gemini-2.5-flash", "gemini-2.5-flash-lite"],
-    "gemini-2.5-flash-lite": ["gemini-2.5-flash-lite"],
-}
+AVAILABLE_MODELS = [
+    "claude-haiku-4-5",
+    "claude-sonnet-4-6",
+    "claude-opus-4-7",
+]
+
+# CLI executable
+CLAUDE_CLI = os.environ.get("CLAUDE_CLI_PATH", "claude")
+
+# Timeouts (seconds)
+SINGLE_TIMEOUT = 60
+BATCH_TIMEOUT = 180
+
+# Default rate limit pause (seconds between calls)
+DEFAULT_PAUSE = 0.5
 
 
 DEFAULT_SYSTEM_PROMPT = (
@@ -38,6 +59,15 @@ DEFAULT_SYSTEM_PROMPT = (
     "anonymous authority references, conspiracy framing, clickbait patterns, logical fallacies.\n\n"
     "Respond ONLY with valid JSON:\n"
     '{"label": "REAL" or "FAKE", "confidence": 0.0-1.0, "reason": "brief explanation"}'
+)
+
+DEFAULT_BATCH_SYSTEM_PROMPT = (
+    "You are an expert media literacy analyst. You will receive MULTIPLE texts in one request. "
+    "For EACH text, classify as REAL or FAKE.\n\n"
+    "Analyze each for: factual claims without evidence, emotional manipulation, "
+    "anonymous authority references, conspiracy framing, clickbait patterns, logical fallacies.\n\n"
+    "Respond ONLY with a valid JSON array, one object per text in the SAME ORDER:\n"
+    '[{"id": 1, "label": "FAKE", "confidence": 0.85, "reason": "brief"}, ...]'
 )
 
 DEFAULT_COT_INSTRUCTION = (
@@ -50,42 +80,135 @@ DEFAULT_COT_INSTRUCTION = (
 )
 
 
-def _get_client():
-    """Lazy-init Gemini client."""
-    try:
-        from google import genai
-        from google.genai import types
-    except ImportError as e:
+# ─────────────────────────────────────────────────────────────────
+# CORE: Claude Code CLI invocation
+# ─────────────────────────────────────────────────────────────────
+
+class ClaudeCLIError(RuntimeError):
+    """Помилка виклику claude CLI (timeout, exit_code, parse fail)."""
+
+
+def _check_environment() -> None:
+    """
+    Перевірити що:
+      1. ANTHROPIC_API_KEY не встановлений (інакше біллинг піде через API)
+      2. claude CLI доступний у PATH
+    """
+    if os.environ.get("ANTHROPIC_API_KEY"):
         raise RuntimeError(
-            "google-genai SDK not installed. Run: pip install google-genai"
-        ) from e
+            "❌ ANTHROPIC_API_KEY встановлений у env. "
+            "Видаліть його (`unset ANTHROPIC_API_KEY`) перед запуском backend, "
+            "інакше calls будуть біллитись на API account замість Max plan."
+        )
 
-    api_key = GEMINI_API_KEY or os.environ.get("GEMINI_API_KEY", "").strip()
-    if not api_key:
-        raise ValueError("GEMINI_API_KEY not set. Configure it in .env file.")
-    return genai.Client(api_key=api_key), types
+    try:
+        result = subprocess.run(
+            [CLAUDE_CLI, "--version"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if result.returncode != 0:
+            raise ClaudeCLIError(f"claude --version exit_code={result.returncode}")
+    except FileNotFoundError:
+        raise RuntimeError(
+            f"❌ `{CLAUDE_CLI}` CLI не знайдено у PATH. "
+            "Встановіть Claude Code: https://claude.com/claude-code"
+        )
+    except subprocess.TimeoutExpired:
+        raise ClaudeCLIError("claude --version timed out")
 
+
+def _call_claude_cli(
+    prompt: str,
+    *,
+    model: str = DEFAULT_BASE_MODEL,
+    timeout: int = SINGLE_TIMEOUT,
+) -> str:
+    """
+    Один виклик `claude -p "prompt" --model X --output-format json`.
+    Повертає raw text відповіді (поле `result` з outer JSON).
+
+    Raises:
+        ClaudeCLIError при будь-якій failure.
+    """
+    cmd = [
+        CLAUDE_CLI,
+        "-p", prompt,
+        "--model", model,
+        "--output-format", "json",
+    ]
+
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        raise ClaudeCLIError(f"claude -p timed out after {timeout}s")
+    except FileNotFoundError:
+        raise ClaudeCLIError(f"`{CLAUDE_CLI}` not in PATH")
+
+    if result.returncode != 0:
+        raise ClaudeCLIError(
+            f"claude -p exit_code={result.returncode}, "
+            f"stderr={result.stderr[:300]}"
+        )
+
+    if not result.stdout:
+        raise ClaudeCLIError("claude -p returned empty stdout")
+
+    # Outer JSON: {"result": "...", "session_id": "...", ...}
+    try:
+        outer = json.loads(result.stdout)
+    except json.JSONDecodeError as e:
+        raise ClaudeCLIError(f"outer JSON parse failed: {e}, raw={result.stdout[:200]}")
+
+    response_text = outer.get("result", "")
+    if not response_text:
+        raise ClaudeCLIError(f"no 'result' field in claude output: {result.stdout[:200]}")
+
+    return response_text
+
+
+# ─────────────────────────────────────────────────────────────────
+# RESPONSE PARSING
+# ─────────────────────────────────────────────────────────────────
 
 def _parse_response(text: str) -> dict:
-    """Parse Gemini's JSON response into {label, confidence, reason}."""
+    """Parse Claude's JSON response into {label, confidence, reason}."""
     if not text:
         return {"label": "UNCERTAIN", "confidence": 0.5, "reason": "empty_response"}
 
-    match = re.search(r'\{.*\}', text, re.DOTALL)
+    # Find first {...} JSON object
+    match = re.search(r'\{[^{}]*"label"[^{}]*\}', text, re.DOTALL)
+    if not match:
+        # Try broader pattern
+        match = re.search(r'\{.*?\}', text, re.DOTALL)
+
     if match:
         try:
             data = json.loads(match.group())
-            label = data.get("label", "UNCERTAIN").upper()
+            label = str(data.get("label", "UNCERTAIN")).upper().strip()
             if label not in ("REAL", "FAKE"):
-                label = "UNCERTAIN"
+                # Try keyword normalization
+                if any(kw in label for kw in ("FAKE", "FALSE", "MISINFO")):
+                    label = "FAKE"
+                elif any(kw in label for kw in ("REAL", "TRUE", "FACTUAL", "CREDIBLE")):
+                    label = "REAL"
+                else:
+                    label = "UNCERTAIN"
             return {
                 "label": label,
                 "confidence": float(data.get("confidence", 0.5)),
-                "reason": data.get("reason", ""),
+                "reason": str(data.get("reason", ""))[:300],
             }
         except (json.JSONDecodeError, ValueError):
             pass
 
+    # Fallback: keyword matching у raw тексті
     upper = text.upper()
     if "FAKE" in upper and "REAL" not in upper:
         return {"label": "FAKE", "confidence": 0.6, "reason": "fallback_regex"}
@@ -93,6 +216,73 @@ def _parse_response(text: str) -> dict:
         return {"label": "REAL", "confidence": 0.6, "reason": "fallback_regex"}
     return {"label": "UNCERTAIN", "confidence": 0.5, "reason": "parse_error"}
 
+
+def _parse_batch_response(text: str, expected_count: int) -> list[dict]:
+    """
+    Парсить batch response — array з [{"id": N, "label": ..., ...}, ...]
+    Returns list of {label, confidence, reason} у порядку id (1, 2, 3, ...).
+    Якщо менше item ніж expected_count — заповнює UNCERTAIN.
+    """
+    fallback = lambda: [
+        {"label": "UNCERTAIN", "confidence": 0.5, "reason": "batch_parse_failed"}
+        for _ in range(expected_count)
+    ]
+
+    if not text:
+        return fallback()
+
+    # Find JSON array
+    match = re.search(r'\[.*\]', text, re.DOTALL)
+    if not match:
+        logger.warning(f"No JSON array in batch response: {text[:200]}")
+        return fallback()
+
+    try:
+        arr = json.loads(match.group())
+        if not isinstance(arr, list):
+            return fallback()
+    except json.JSONDecodeError as e:
+        logger.warning(f"Batch JSON parse failed: {e}, raw={match.group()[:200]}")
+        return fallback()
+
+    # Sort by 'id' if present, else preserve order
+    if all(isinstance(x, dict) and "id" in x for x in arr):
+        try:
+            arr = sorted(arr, key=lambda x: int(x.get("id", 0)))
+        except (ValueError, TypeError):
+            pass
+
+    results = []
+    for item in arr[:expected_count]:
+        if not isinstance(item, dict):
+            results.append({"label": "UNCERTAIN", "confidence": 0.5, "reason": "non_dict_item"})
+            continue
+
+        label = str(item.get("label", "UNCERTAIN")).upper().strip()
+        if label not in ("REAL", "FAKE"):
+            if any(kw in label for kw in ("FAKE", "FALSE")):
+                label = "FAKE"
+            elif any(kw in label for kw in ("REAL", "TRUE")):
+                label = "REAL"
+            else:
+                label = "UNCERTAIN"
+
+        results.append({
+            "label": label,
+            "confidence": float(item.get("confidence", 0.5)),
+            "reason": str(item.get("reason", ""))[:200],
+        })
+
+    # Pad if response shorter
+    while len(results) < expected_count:
+        results.append({"label": "UNCERTAIN", "confidence": 0.5, "reason": "missing_in_response"})
+
+    return results
+
+
+# ─────────────────────────────────────────────────────────────────
+# PROMPT BUILDERS
+# ─────────────────────────────────────────────────────────────────
 
 def _build_user_prompt_zero_shot(text: str) -> str:
     return f"Classify this text:\n\n{text[:2000]}"
@@ -110,125 +300,56 @@ def _build_user_prompt_cot(text: str, cot_instruction: str) -> str:
     return f"{cot_instruction}\n\nText to classify:\n\n{text[:2000]}"
 
 
-def _call_gemini_raw(
-    client,
-    types,
-    *,
-    base_model: str,
-    system_prompt: str,
-    user_prompt: str,
-    temperature: float,
-    max_output_tokens: int,
-) -> tuple[str, str]:
-    """One Gemini call with fallback. Returns (raw_text, model_used).
+def _build_batch_user_prompt(texts: list[str], examples: Optional[list[dict]] = None) -> str:
+    """Build prompt for batch classification of multiple texts."""
+    parts = []
 
-    Unlike _call_gemini, does NOT parse the response — returns the raw text
-    so callers (claim extraction, stance detection, etc.) can parse it themselves.
-    """
-    chain = FALLBACK_CHAIN.get(base_model, [DEFAULT_BASE_MODEL])
+    if examples:
+        parts.append("Reference examples:\n")
+        for i, ex in enumerate(examples[:5], 1):
+            parts.append(f"  {ex['label']}: {ex['text'][:300]}")
+        parts.append("")
 
-    for model_id in chain:
-        for attempt in range(3):
-            try:
-                response = client.models.generate_content(
-                    model=model_id,
-                    contents=user_prompt,
-                    config=types.GenerateContentConfig(
-                        system_instruction=system_prompt,
-                        temperature=temperature,
-                        max_output_tokens=max_output_tokens,
-                    ),
-                )
-                if not response or not response.text:
-                    logger.warning(f"{model_id}: empty response")
-                    break
-                return response.text.strip(), model_id
-            except Exception as e:
-                err = str(e)
-                if "429" in err or "RESOURCE_EXHAUSTED" in err or "quota" in err.lower():
-                    delay_match = re.search(r'retryDelay.*?(\d+)', err)
-                    wait = int(delay_match.group(1)) + 2 if delay_match else 15
-                    if attempt < 2:
-                        logger.warning(f"{model_id}: rate limited, retry in {wait}s")
-                        time.sleep(wait)
-                    else:
-                        logger.warning(f"{model_id}: quota exhausted, trying next model")
-                        break
-                elif "404" in err or "not found" in err.lower():
-                    logger.warning(f"{model_id}: not available, trying next")
-                    break
-                else:
-                    logger.warning(f"{model_id}: unexpected error: {e}")
-                    break
+    parts.append(f"Now classify each of the following {len(texts)} texts as FAKE or REAL.")
+    parts.append("Respond with a JSON array, one object per text, in the same order.\n")
+    parts.append("Texts:\n")
 
-    return "", "none"
+    for i, t in enumerate(texts, 1):
+        cleaned = t[:1500].replace("\n", " ").strip()
+        parts.append(f'{i}. """{cleaned}"""\n')
+
+    return "\n".join(parts)
 
 
-def _call_gemini(
-    client,
-    types,
-    *,
-    base_model: str,
-    system_prompt: str,
-    user_prompt: str,
-    temperature: float,
-    max_output_tokens: int,
-) -> tuple[dict, str]:
-    """One Gemini call with fallback. Returns (parsed_result, model_used)."""
-    raw_text, model_used = _call_gemini_raw(
-        client, types,
-        base_model=base_model,
-        system_prompt=system_prompt,
-        user_prompt=user_prompt,
-        temperature=temperature,
-        max_output_tokens=max_output_tokens,
-    )
-    if not raw_text:
-        return (
-            {"label": "UNCERTAIN", "confidence": 0.5, "reason": "all_models_exhausted"},
-            model_used,
-        )
-    return _parse_response(raw_text), model_used
-
-
-# Backward-compat alias for /evaluate endpoint which calls _call_with_fallback
-def _call_with_fallback(client, types, contents, temperature=0, max_tokens=300):
-    """Legacy wrapper for main.py::evaluate_llm."""
-    return _call_gemini(
-        client, types,
-        base_model=DEFAULT_BASE_MODEL,
-        system_prompt=DEFAULT_SYSTEM_PROMPT,
-        user_prompt=contents,
-        temperature=temperature,
-        max_output_tokens=max_tokens,
-    )
-
+# ─────────────────────────────────────────────────────────────────
+# PUBLIC API: Single prediction
+# ─────────────────────────────────────────────────────────────────
 
 def predict_with_preset(text: str, preset_config: dict) -> dict:
     """
     Classify text using a stored LLM preset config.
 
     preset_config keys:
-        base_model, mode (zero_shot|few_shot|cot|bagging),
-        system_prompt, temperature, max_output_tokens,
-        few_shot_examples (for few_shot), cot_instruction (for cot),
-        bagging_n_calls (for bagging)
+        base_model: claude-haiku-4-5 | claude-sonnet-4-6 | claude-opus-4-7
+        mode: zero_shot | few_shot | cot | bagging
+        system_prompt: (optional) custom system prompt
+        temperature: 0.0-1.0 (НЕ використовується у CLI, але зберігається у preset)
+        max_output_tokens: (НЕ використовується у CLI)
+        few_shot_examples: list of {text, label} (для few_shot)
+        cot_instruction: custom CoT prompt (для cot)
+        bagging_n_calls: int (для bagging)
 
-    Returns {label, confidence, reason, base_model_used, mode, n_calls, votes?}.
+    Returns: {label, confidence, reason, base_model_used, mode, n_calls, votes?}
     """
-    client, types = _get_client()
+    _check_environment()
 
     mode = preset_config.get("mode", "zero_shot")
     base_model = preset_config.get("base_model", DEFAULT_BASE_MODEL)
     system_prompt = preset_config.get("system_prompt") or DEFAULT_SYSTEM_PROMPT
-    temperature = float(preset_config.get("temperature", 0.0))
-    max_output_tokens = int(preset_config.get("max_output_tokens", 200))
 
+    # Build user prompt based on mode
     if mode == "zero_shot":
         user_prompt = _build_user_prompt_zero_shot(text)
-        return _run_single(client, types, base_model, system_prompt, user_prompt,
-                           temperature, max_output_tokens, mode)
-
     elif mode == "few_shot":
         examples = preset_config.get("few_shot_examples") or []
         if not examples:
@@ -236,80 +357,71 @@ def predict_with_preset(text: str, preset_config: dict) -> dict:
             user_prompt = _build_user_prompt_zero_shot(text)
         else:
             user_prompt = _build_user_prompt_few_shot(text, examples)
-        return _run_single(client, types, base_model, system_prompt, user_prompt,
-                           temperature, max_output_tokens, mode)
-
     elif mode == "cot":
         cot_instruction = preset_config.get("cot_instruction") or DEFAULT_COT_INSTRUCTION
         user_prompt = _build_user_prompt_cot(text, cot_instruction)
-        cot_tokens = max(max_output_tokens, 500)
-        return _run_single(client, types, base_model, system_prompt, user_prompt,
-                           temperature, cot_tokens, mode)
-
     elif mode == "bagging":
         n_calls = int(preset_config.get("bagging_n_calls", 3))
-        bagging_temp = max(temperature, 0.7)
         user_prompt = _build_user_prompt_zero_shot(text)
-        return _run_bagging(client, types, base_model, system_prompt, user_prompt,
-                            bagging_temp, max_output_tokens, n_calls)
-
+        return _run_bagging(base_model, system_prompt, user_prompt, n_calls, mode)
     else:
         raise ValueError(f"Unknown mode: {mode}")
 
+    return _run_single(base_model, system_prompt, user_prompt, mode)
 
-def _run_single(client, types, base_model, system_prompt, user_prompt,
-                temperature, max_output_tokens, mode) -> dict:
-    result, model_used = _call_gemini(
-        client, types,
-        base_model=base_model,
-        system_prompt=system_prompt,
-        user_prompt=user_prompt,
-        temperature=temperature,
-        max_output_tokens=max_output_tokens,
-    )
-    logger.info(f"LLM {mode} ({model_used}): label={result['label']}, conf={result['confidence']:.2f}")
+
+def _run_single(base_model: str, system_prompt: str, user_prompt: str, mode: str) -> dict:
+    """Single Claude call → parsed result."""
+    full_prompt = f"{system_prompt}\n\n{user_prompt}"
+
+    try:
+        raw_text = _call_claude_cli(full_prompt, model=base_model)
+    except ClaudeCLIError as e:
+        logger.error(f"Claude CLI failed: {e}")
+        return {
+            "label": "UNCERTAIN", "confidence": 0.5, "reason": f"cli_error: {str(e)[:100]}",
+            "base_model_used": base_model, "mode": mode, "n_calls": 0,
+        }
+
+    parsed = _parse_response(raw_text)
+    logger.info(f"LLM {mode} ({base_model}): label={parsed['label']}, conf={parsed['confidence']:.2f}")
     return {
-        "label": result["label"],
-        "confidence": result["confidence"],
-        "reason": result.get("reason", ""),
-        "base_model_used": model_used,
+        "label": parsed["label"],
+        "confidence": parsed["confidence"],
+        "reason": parsed.get("reason", ""),
+        "base_model_used": base_model,
         "mode": mode,
         "n_calls": 1,
     }
 
 
-def _run_bagging(client, types, base_model, system_prompt, user_prompt,
-                 temperature, max_output_tokens, n_calls) -> dict:
-    results = []
-    models_used = []
+def _run_bagging(base_model: str, system_prompt: str, user_prompt: str, n_calls: int, mode: str) -> dict:
+    """Multiple Claude calls → majority vote."""
+    full_prompt = f"{system_prompt}\n\n{user_prompt}"
 
+    results = []
     for i in range(n_calls):
         try:
-            parsed, model_used = _call_gemini(
-                client, types,
-                base_model=base_model,
-                system_prompt=system_prompt,
-                user_prompt=user_prompt,
-                temperature=temperature,
-                max_output_tokens=max_output_tokens,
-            )
+            raw_text = _call_claude_cli(full_prompt, model=base_model)
+            parsed = _parse_response(raw_text)
             results.append(parsed)
-            models_used.append(model_used)
-        except Exception as e:
+        except ClaudeCLIError as e:
             logger.warning(f"bagging call {i+1}/{n_calls} failed: {e}")
+        # Small pause between bagging calls
+        if i < n_calls - 1:
+            time.sleep(DEFAULT_PAUSE)
 
     if not results:
         return {
             "label": "UNCERTAIN", "confidence": 0.5, "reason": "all_bagging_failed",
-            "base_model_used": "none", "mode": "bagging", "n_calls": 0,
+            "base_model_used": base_model, "mode": "bagging", "n_calls": 0,
         }
 
     labels = [r["label"] for r in results if r["label"] in ("REAL", "FAKE")]
     if not labels:
         return {
             "label": "UNCERTAIN", "confidence": 0.5, "reason": "all_bagging_uncertain",
-            "base_model_used": models_used[0] if models_used else "none",
-            "mode": "bagging", "n_calls": len(results),
+            "base_model_used": base_model, "mode": "bagging", "n_calls": len(results),
         }
 
     counter = Counter(labels)
@@ -320,22 +432,111 @@ def _run_bagging(client, types, base_model, system_prompt, user_prompt,
     confidence = vote_fraction * avg_conf
     reasons = [r["reason"] for r in results if r["label"] == winner and r["reason"]]
 
-    logger.info(f"LLM bagging: label={winner}, votes={dict(counter)}, conf={confidence:.2f}")
+    logger.info(f"LLM bagging ({base_model}): label={winner}, votes={dict(counter)}, conf={confidence:.2f}")
     return {
         "label": winner,
         "confidence": round(confidence, 4),
         "reason": reasons[0] if reasons else "",
-        "base_model_used": models_used[0] if models_used else "none",
+        "base_model_used": base_model,
         "mode": "bagging",
         "n_calls": len(results),
         "votes": dict(counter),
     }
 
 
-# ── Backward compat wrappers (for /evaluate endpoint) ───────────────────
+# ─────────────────────────────────────────────────────────────────
+# PUBLIC API: Batch prediction
+# ─────────────────────────────────────────────────────────────────
+
+def predict_batch_with_preset(
+    texts: list[str],
+    preset_config: dict,
+    batch_size: int = 12,
+    pause_between: float = 1.0,
+) -> list[dict]:
+    """
+    Batch classification — обробляє СОТНІ текстів через batched Claude calls.
+
+    Об'єднує по `batch_size` текстів у один Claude call → розбирає JSON array.
+    Це у ~10x швидше ніж по одному.
+
+    Args:
+        texts: список текстів для класифікації
+        preset_config: preset configuration (base_model, mode, few_shot_examples)
+        batch_size: скільки текстів за один Claude call (default 12)
+        pause_between: пауза між batches у секундах (default 1.0)
+
+    Returns:
+        list of dicts (один per text у тому ж порядку):
+        [{label, confidence, reason, base_model_used, mode}, ...]
+    """
+    _check_environment()
+
+    if not texts:
+        return []
+
+    base_model = preset_config.get("base_model", DEFAULT_BASE_MODEL)
+    mode = preset_config.get("mode", "zero_shot")
+    custom_system = preset_config.get("system_prompt")
+
+    # For batch, prefer batch-specific system prompt
+    system_prompt = custom_system or DEFAULT_BATCH_SYSTEM_PROMPT
+    examples = preset_config.get("few_shot_examples") if mode == "few_shot" else None
+
+    n_total = len(texts)
+    n_batches = (n_total + batch_size - 1) // batch_size
+
+    logger.info(f"Batch eval: {n_total} samples, {n_batches} batches × {batch_size}, model={base_model}")
+
+    all_results = []
+    start_time = time.time()
+
+    for batch_idx in range(n_batches):
+        batch_start_idx = batch_idx * batch_size
+        batch_end_idx = min(batch_start_idx + batch_size, n_total)
+        batch_texts = texts[batch_start_idx:batch_end_idx]
+
+        user_prompt = _build_batch_user_prompt(batch_texts, examples=examples)
+        full_prompt = f"{system_prompt}\n\n{user_prompt}"
+
+        try:
+            raw_text = _call_claude_cli(full_prompt, model=base_model, timeout=BATCH_TIMEOUT)
+            batch_results = _parse_batch_response(raw_text, expected_count=len(batch_texts))
+        except ClaudeCLIError as e:
+            logger.error(f"Batch {batch_idx+1}/{n_batches} failed: {e}")
+            batch_results = [
+                {"label": "UNCERTAIN", "confidence": 0.5, "reason": f"batch_failed: {str(e)[:100]}"}
+                for _ in batch_texts
+            ]
+
+        # Annotate with metadata
+        for r in batch_results:
+            r["base_model_used"] = base_model
+            r["mode"] = mode
+
+        all_results.extend(batch_results)
+
+        # Progress
+        elapsed = time.time() - start_time
+        eta = (n_batches - batch_idx - 1) * (elapsed / (batch_idx + 1))
+        logger.info(
+            f"Batch {batch_idx+1}/{n_batches} done "
+            f"({batch_end_idx}/{n_total} samples, {elapsed:.0f}s elapsed, ETA {eta:.0f}s)"
+        )
+
+        # Pause between batches (rate limit safety for Max plan)
+        if batch_idx < n_batches - 1:
+            time.sleep(pause_between)
+
+    return all_results
+
+
+# ─────────────────────────────────────────────────────────────────
+# LEGACY WRAPPERS
+# ─────────────────────────────────────────────────────────────────
 
 def predict(text: str, mode: str = "single", feature_values: dict | None = None) -> dict:
-    """Legacy wrapper. Used by main.py evaluate_llm and analyze_text LLM branch (fallback)."""
+    """Legacy wrapper for /evaluate endpoint and analyze_text LLM branch."""
     preset = {
         "base_model": DEFAULT_BASE_MODEL,
         "mode": "bagging" if mode == "bagging" else "zero_shot",

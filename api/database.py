@@ -73,6 +73,13 @@ class Dataset(Base):
     is_active = Column(Boolean, default=False)  # one per user can be active
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
+    # Cached analytics JSON (from Colab /analyze_dataset)
+    analytics_cache = Column(Text, nullable=True)
+
+    # Active split selection: NULL = auto-split (70/15/15),
+    # "in_domain" / "cross_domain" / "mixed" = використовувати splits_<name>/ на ML server.
+    active_split = Column(String, nullable=True, default=None)
+
 
 class Experiment(Base):
     __tablename__ = "experiments"
@@ -109,18 +116,53 @@ class ModelRecord(Base):
     __tablename__ = "models"
     id = Column(Integer, primary_key=True, index=True)
     experiment_id = Column(String, nullable=True)
+    # Dataset на якому модель тренувалась — для відображення у ModelsPage картці.
+    dataset_id = Column(Integer, ForeignKey("datasets.id"), nullable=True)
     name = Column(String, nullable=False)
     model_type = Column(String, nullable=False)
+    pipeline_type = Column(String, nullable=False, default="tweet")  # "tweet" | "article" | "aggregated" | "graph"
     filename = Column(String, unique=True, nullable=True)
     model_path = Column(String, nullable=True)
     llm_config = Column(Text, nullable=True)
     accuracy = Column(Float, nullable=True)
+    precision = Column(Float, nullable=True)
+    recall = Column(Float, nullable=True)
+    f1_score = Column(Float, nullable=True)
+    metrics_json = Column(Text, nullable=True)
     is_active = Column(Boolean, default=False)
+    # Який split-набір використано при тренуванні: NULL = auto/unknown,
+    # "in_domain" / "cross_domain" / "mixed" — фіксований split із splits_<name>/.
+    splits_used = Column(String, nullable=True, default=None)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 
 def create_tables():
     Base.metadata.create_all(bind=engine)
+    _run_sqlite_migrations()
+
+
+def _run_sqlite_migrations():
+    """Додає колонки, яких немає у вже існуючій SQLite БД (dev-режим)."""
+    migrations = [
+        ("datasets", "analytics_cache", "TEXT"),
+        ("datasets", "active_split", "TEXT"),
+        ("models", "precision", "REAL"),
+        ("models", "recall", "REAL"),
+        ("models", "f1_score", "REAL"),
+        ("models", "metrics_json", "TEXT"),
+        ("models", "pipeline_type", "TEXT DEFAULT 'tweet'"),
+        ("models", "splits_used", "TEXT"),
+        ("models", "dataset_id", "INTEGER"),
+    ]
+    with engine.begin() as conn:
+        for table, column, coltype in migrations:
+            existing = {
+                row[1] for row in conn.exec_driver_sql(f"PRAGMA table_info({table})")
+            }
+            if column not in existing:
+                conn.exec_driver_sql(
+                    f"ALTER TABLE {table} ADD COLUMN {column} {coltype}"
+                )
 
 
 def get_db():

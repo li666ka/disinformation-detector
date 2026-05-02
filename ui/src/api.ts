@@ -1,5 +1,4 @@
 import axios from "axios";
-import type { VerifyNewsRequest, VerifyNewsResponse } from "./types";
 
 const API_URL = "http://localhost:8000";
 
@@ -29,11 +28,4 @@ api.interceptors.response.use(
 );
 
 export default api;
-
-// ── Typed helpers ────────────────────────────────────────────────────────────
-
-export const verifyNews = async (req: VerifyNewsRequest) => {
-  const { data } = await api.post<VerifyNewsResponse>("/sources/verify-news", req);
-  return data;
-};
 

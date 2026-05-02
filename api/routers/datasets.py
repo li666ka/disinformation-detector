@@ -14,8 +14,11 @@ Endpoints:
 """
 import io
 import logging
+import os
 import zipfile
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
+from pathlib import Path
+import requests
+from fastapi import APIRouter, Body, Depends, HTTPException, UploadFile, File, Form
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
@@ -26,6 +29,7 @@ from api.dataset_service import (
     validate_zip_structure,
     validate_csv_schemas,
     save_dataset_files,
+    save_dataset_splits,
     delete_dataset_folder,
     compute_folder_size,
     compute_basic_stats,
@@ -81,15 +85,16 @@ async def upload_dataset(
 
     # Validate ZIP structure
     try:
-        zf, found_files = validate_zip_structure(zip_bytes)
+        zf, found_files, splits_in_zip = validate_zip_structure(zip_bytes)
     except DatasetValidationError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    # Validate schemas + content
+    # Validate schemas + content. We need the ZipFile open later for splits, тому
+    # читаємо CSVs у dataframes але не закриваємо archive (не використовуємо `with zf`).
     try:
-        with zf:
-            dataframes, warnings = validate_csv_schemas(zf, found_files)
+        dataframes, warnings = validate_csv_schemas(zf, found_files)
     except DatasetValidationError as e:
+        zf.close()
         raise HTTPException(status_code=400, detail=str(e))
 
     # Compute basic stats
@@ -121,11 +126,25 @@ async def upload_dataset(
             current_user.id, record.id, dataframes,
             name=name, description=description,
         )
+        saved_splits = save_dataset_splits(folder, zf, splits_in_zip)
     except Exception as e:
         db.delete(record)
         db.commit()
+        zf.close()
         logger.exception("Failed to save dataset files")
         raise HTTPException(status_code=500, detail=f"Не вдалося зберегти файли: {e}")
+    finally:
+        # Усі читання з ZIP завершено — закриваємо archive.
+        try:
+            zf.close()
+        except Exception:
+            pass
+
+    if saved_splits:
+        warnings.append(
+            f"Знайдено фіксовані splits: {', '.join(sorted(saved_splits))}"
+        )
+        logger.info(f"Dataset id={record.id} saved with splits: {saved_splits}")
 
     # Update record with folder path and size
     record.folder_path = str(folder)
@@ -206,6 +225,90 @@ def get_dataset_stats(
         raise HTTPException(status_code=500, detail=f"Помилка обчислення статистики: {e}")
 
     return DatasetStatsResponse(dataset_id=dataset_id, **stats)
+
+
+# ── GET /datasets/{id}/splits ────────────────────────────────────────────
+
+def _count_csv_rows(path) -> int:
+    """Кількість data-рядків у CSV (без header). Швидкий побайтовий count."""
+    try:
+        with open(path, "rb") as f:
+            n = sum(1 for _ in f)
+        return max(0, n - 1)
+    except OSError:
+        return 0
+
+
+@router.get("/{dataset_id}/splits")
+def get_dataset_splits(
+    dataset_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """List splits_<name>/ subfolders на локальному дисковому датасеті.
+
+    Source of truth — upload (`save_dataset_splits`). На Colab вони з'являються
+    лише після /activate, тому ходити туди за списком немає сенсу.
+    """
+    ds = db.query(Dataset).filter(
+        Dataset.id == dataset_id,
+        Dataset.user_id == current_user.id,
+    ).first()
+    if not ds:
+        raise HTTPException(status_code=404, detail="Датасет не знайдено")
+
+    folder = Path(ds.folder_path) if ds.folder_path else None
+    splits: list[dict] = []
+    if folder and folder.exists():
+        for sub in sorted(folder.iterdir()):
+            if not sub.is_dir() or not sub.name.startswith("splits_"):
+                continue
+            train = sub / "split_train.csv"
+            val = sub / "split_val.csv"
+            test = sub / "split_test.csv"
+            if not (train.exists() and val.exists() and test.exists()):
+                continue
+            splits.append({
+                "name": sub.name[len("splits_"):],
+                "folder": sub.name,
+                "train_count": _count_csv_rows(train),
+                "val_count": _count_csv_rows(val),
+                "test_count": _count_csv_rows(test),
+            })
+
+    return {
+        "dataset_id": dataset_id,
+        "splits": splits,
+        "has_legacy_splits": False,
+    }
+
+
+# ── PATCH /datasets/{id}/active-split ────────────────────────────────────
+
+@router.patch("/{dataset_id}/active-split")
+def set_active_split(
+    dataset_id: int,
+    payload: dict = Body(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Set active split name (or null for auto-split)."""
+    ds = db.query(Dataset).filter(
+        Dataset.id == dataset_id,
+        Dataset.user_id == current_user.id,
+    ).first()
+    if not ds:
+        raise HTTPException(status_code=404, detail="Датасет не знайдено")
+
+    split_name = payload.get("split_name")
+    if split_name is not None and not isinstance(split_name, str):
+        raise HTTPException(status_code=400, detail="split_name must be string or null")
+
+    ds.active_split = split_name or None
+    db.commit()
+    db.refresh(ds)
+
+    return {"id": ds.id, "active_split": ds.active_split}
 
 
 # ── GET /datasets/{id}/template ──────────────────────────────────────────

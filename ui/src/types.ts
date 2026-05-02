@@ -58,31 +58,51 @@ export type EmotionalFeatureKey =
   | "negative_score";
 
 export type StylisticFeatureKey =
+  // Stylistic (form)
   | "caps_ratio"
   | "ttr"
   | "repetition_score"
-  | "avg_word_length";
-
-export type RhetoricalFeatureKey =
+  | "avg_word_length"
+  // Rhetorical (manipulation patterns) — раніше окрема група
   | "clickbait_score"
   | "authority_refs"
   | "pronoun_ratio"
   | "question_count";
 
 export type SocialFeatureKey =
-  | "upvote_ratio"
-  | "score_normalized"
-  | "num_comments_norm"
-  | "domain_credibility"
+  // Profile counts
+  | "followers_count_norm"
+  | "friends_count_norm"
+  | "ff_ratio"
+  | "statuses_count_norm"
   | "account_age_norm"
-  | "has_url";
+  | "statuses_per_day"
+  // Profile flags + strings
+  | "verified"
+  | "has_description"
+  | "has_location"
+  | "description_length_norm"
+  | "screen_name_length_norm"
+  | "screen_name_digits_ratio"
+  // Engagement
+  | "like_count_norm"
+  | "retweet_count_norm"
+  | "reply_count_norm"
+  | "like_to_retweet_ratio"
+  | "engagement_rate"
+  // Graph cascade (per-article)
+  | "cascade_depth_norm"
+  | "cascade_breadth_norm"
+  | "lifetime_hours_norm"
+  | "retweets_per_tweet"
+  | "replies_per_tweet"
+  | "unique_users_norm";
 
 /** All extractable numeric feature keys. */
 export type FeatureKey =
   | SemanticFeatureKey
   | EmotionalFeatureKey
   | StylisticFeatureKey
-  | RhetoricalFeatureKey
   | SocialFeatureKey;
 
 export type FeatureMask = Record<FeatureKey, boolean>;
@@ -97,13 +117,14 @@ export type FeatureGroupId =
   | "semantic"
   | "emotional"
   | "stylistic"
-  | "rhetorical"
   | "social";
 
 export interface FeatureDefinition {
   key: FeatureKey;
   label: string;
   type: FeatureGroupId;
+  /** True для cascade/graph features у social group — для UI badge. */
+  isGraph?: boolean;
 }
 
 export interface FeatureGroupDef {
@@ -120,7 +141,7 @@ export interface AdditionalFeatures {
 
 // ── Model Configs (sent to backend) ─────────────────────────────────────────
 
-export type ModelType = "nb" | "deberta" | "llm";
+export type ModelType = "nb" | "distilbert" | "llm" | "gin" | "sage";
 
 interface BaseModelConfig {
   model: ModelType;
@@ -133,10 +154,13 @@ export interface NBModelConfig extends BaseModelConfig {
   vectorizer: "tfidf" | "count";
   ngram_range: "1,1" | "1,2" | "1,3";
   alpha: string;
+  /** True (default) — pipeline містить TF-IDF tokens.
+   *  False — тренування тільки на additional_features (для ablation). */
+  use_text?: boolean;
 }
 
-export interface DeBERTaModelConfig extends BaseModelConfig {
-  model: "deberta";
+export interface DistilBERTModelConfig extends BaseModelConfig {
+  model: "distilbert";
   integration_mode: "concat" | "multiview";
 }
 
@@ -145,7 +169,32 @@ export interface LLMModelConfig extends BaseModelConfig {
   mode: "single" | "bagging";
 }
 
-export type ModelConfig = NBModelConfig | DeBERTaModelConfig | LLMModelConfig;
+export interface GINModelConfig extends BaseModelConfig {
+  model: "gin";
+  hidden_dim: string;
+  num_layers: string;
+  dropout: string;
+  learning_rate: string;
+  epochs: string;
+  pooling: "mean" | "sum" | "max";
+}
+
+export interface SAGEModelConfig extends BaseModelConfig {
+  model: "sage";
+  hidden_dim: string;
+  num_layers: string;
+  dropout: string;
+  learning_rate: string;
+  epochs: string;
+  aggregator: "mean" | "max" | "lstm";
+}
+
+export type ModelConfig =
+  | NBModelConfig
+  | DistilBERTModelConfig
+  | LLMModelConfig
+  | GINModelConfig
+  | SAGEModelConfig;
 
 // ── Ensemble ────────────────────────────────────────────────────────────────
 
@@ -163,7 +212,6 @@ export interface PredictRequest {
   mode: "single" | "ensemble";
   models: ModelConfig[];
   ensemble?: EnsembleConfig;
-  metadata?: PostMetadata;
 }
 
 export interface TrainRequest {
@@ -171,14 +219,6 @@ export interface TrainRequest {
   models: ModelConfig[];
   ensemble?: EnsembleConfig;
   preprocessing?: PreprocessingConfig;
-}
-
-export interface PostMetadata {
-  upvote_ratio: number;
-  score: number;
-  num_comments: number;
-  domain: string;
-  account_age_days: number;
 }
 
 // ── Responses ───────────────────────────────────────────────────────────────
@@ -229,16 +269,32 @@ export interface TrainResponse {
   precision: number;
   recall: number;
   f1_score: number;
+  // Optional extras — present in metrics_json after training (esp. for class-imbalanced datasets)
+  f1_macro?: number;
+  f1_fake?: number;
+  f1_real?: number;
+  roc_auc?: number;
   confusion_matrix?: ConfusionMatrix;
   train_size: number;
   test_size: number;
   training_time: number | string;
   top_words?: TopWords;
+  feature_samples?: FeatureSample[];
   // envelope fields from API
   status?: string;
   message?: string;
   path?: string;
   download_url?: string;
+}
+
+export interface FeatureSample {
+  label: "FAKE" | "REAL";
+  source: string;
+  text_raw: string;
+  text_processed: string;
+  emotional: Record<string, number>;
+  stylistic: Record<string, number>;
+  social?: Record<string, number>;
 }
 
 // ── DB Records ──────────────────────────────────────────────────────────────
@@ -259,31 +315,7 @@ export interface Experiment {
   created_at: string;
 }
 
-export interface EvalSample {
-  index: number;
-  text: string;
-  true_label: 0 | 1;
-  pred_label: 0 | 1;
-  pred_str: "REAL" | "FAKE" | "UNCERTAIN";
-  true_str: "REAL" | "FAKE";
-  confidence: number;
-  reason: string;
-  correct: boolean;
-}
-
-export interface EvalMetrics {
-  accuracy: number;
-  precision: number;
-  recall: number;
-  f1_score: number;
-  confusion_matrix: ConfusionMatrix;
-  samples_evaluated: number;
-}
-
-export interface EvalResponse {
-  metrics: EvalMetrics;
-  samples: EvalSample[];
-}
+export type PipelineType = "tweet" | "article" | "aggregated" | "graph";
 
 export interface ModelRecord {
   id: number;
@@ -291,8 +323,22 @@ export interface ModelRecord {
   filename?: string | null;
   name: string;
   model_type: string;
+  pipeline_type?: PipelineType;
   accuracy?: number;
+  precision?: number;
+  recall?: number;
+  f1_score?: number;
+  // GNN-specific metrics (optional — present in metrics_json after evaluation)
+  f1_macro?: number;
+  f1_fake?: number;
+  f1_real?: number;
+  roc_auc?: number;
+  best_epoch?: number;
+  metrics_json?: string | null;
   is_active: boolean;
+  splits_used?: string | null;
+  dataset_id?: number | null;
+  dataset_name?: string | null;
   llm_config?: string | null;
   created_at: string;
 }
@@ -304,13 +350,14 @@ export interface NBParams {
   vectorizer: NBModelConfig["vectorizer"];
   ngram: NBModelConfig["ngram_range"];
   alpha: string;
+  use_text?: boolean;
   additional_groups: FeatureGroupId[];
   feature_mask: Partial<FeatureMask>;
   preprocessing: PreprocessingConfig;
 }
 
-export interface DeBERTaParams {
-  integration_mode: DeBERTaModelConfig["integration_mode"];
+export interface DistilBERTParams {
+  integration_mode: DistilBERTModelConfig["integration_mode"];
   additional_groups: FeatureGroupId[];
   feature_mask: Partial<FeatureMask>;
 }
@@ -322,7 +369,7 @@ export interface LLMParams {
   feature_mask: Partial<FeatureMask>;
 }
 
-export type ModelParams = NBParams | DeBERTaParams | LLMParams;
+export type ModelParams = NBParams | DistilBERTParams | LLMParams;
 
 // ── Real-data sources (Bluesky / Mastodon / RSS) ────────────────────────────
 
@@ -376,6 +423,61 @@ export interface ClassifiedPost extends NewsItem {
     probability: number | null; // null when UNCERTAIN
     reason?: string; // optional explanation from LLM
   } | null;
+  factCheck?: FactCheckResult;
+  factCheckLoading?: boolean;
+}
+
+// ── Fact Check (Google Fact Check Tools API) ──────────────────────────────
+
+export type ClaimStance = "supports" | "refutes" | "neutral";
+
+export interface ClaimResult {
+  claim: string;
+  stance: ClaimStance;
+  author_verdict_initial: "REAL" | "FAKE" | "UNKNOWN";
+  found: boolean;
+  verdict?: string | null;
+  verdict_normalized: "FAKE" | "REAL" | "MIXED" | "UNKNOWN";
+  effective_author_verdict: "FAKE" | "REAL" | "MIXED" | "UNKNOWN";
+  publisher?: string | null;
+  url?: string | null;
+  review_date?: string | null;
+  review_title?: string | null;
+  claim_text_matched?: string | null;
+  match_similarity?: number | null;
+}
+
+export interface FactCheckResult {
+  fact_check_found: boolean;
+  extraction_method?: "llm" | "fallback";
+
+  // Окремі claims
+  claims_extracted?: string[];
+  claims_results?: ClaimResult[];
+
+  // Aggregate verdict (top found claim або overall)
+  verdict?: string | null;
+  verdict_normalized: "FAKE" | "REAL" | "MIXED" | "UNKNOWN";
+  publisher?: string | null;
+  url?: string | null;
+  review_date?: string | null;
+  review_title?: string | null;
+  claim_text_matched?: string | null;
+  claim_query_used?: string | null;
+
+  // Stats
+  claims_total?: number;
+  claims_found?: number;
+  fake_count?: number;
+  real_count?: number;
+  mixed_count?: number;
+
+  // Comparison
+  model_label?: "FAKE" | "REAL" | "UNCERTAIN" | null;
+  model_confidence?: number | null;
+  match?: boolean | null;
+  comparison_status: "MATCH" | "MISMATCH" | "NO_DATA" | "MIXED" | "NO_MODEL";
+  error?: string | null;
 }
 
 // ── Datasets ──────────────────────────────────────────────────────────────
@@ -397,7 +499,22 @@ export interface Dataset {
   has_evidence: boolean;
   file_size_bytes: number;
   is_active: boolean;
+  active_split?: string | null;
   created_at: string;
+}
+
+export interface SplitInfo {
+  name: string;
+  folder: string;
+  train_count: number;
+  val_count: number;
+  test_count: number;
+}
+
+export interface DatasetSplitsResponse {
+  dataset_id: string | number;
+  splits: SplitInfo[];
+  has_legacy_splits: boolean;
 }
 
 export interface DatasetUploadResponse {
@@ -435,6 +552,11 @@ export interface DatasetStats {
   verified_users_pct?: number;
   avg_followers_count?: number;
   top_domains: { domain: string; count: number }[];
+
+  // NEW
+  coverage_pct?: number | null;
+  coverage_gap_fake_real?: number | null;
+  synthetic_articles_count?: number | null;
 }
 
 // ── LLM Presets ───────────────────────────────────────────────────────────
@@ -485,51 +607,6 @@ export interface LLMPresetTestResponse {
   reason: string;
   base_model_used: string;
   elapsed_seconds: number;
-}
-
-// ── Cross-platform verification ──────────────────────────────────────────
-
-export interface VerificationStats {
-  total_related: number;
-  by_source: Record<string, number>;
-  original_domain: string | null;
-  domain_mentioned_count: number;
-  total_engagement: {
-    likes: number;
-    reposts: number;
-    replies: number;
-  };
-  verified_authors_pct: number | null;
-  custom_domain_authors_pct: number | null;
-  avg_account_age_days: number | null;
-  min_account_age_days: number | null;
-  avg_followers_count: number | null;
-  median_followers_count: number | null;
-  posts_with_url_pct: number;
-  reply_ratio_pct: number;
-}
-
-export interface VerificationSignal {
-  type: string;
-  severity: "info" | "warn" | "alert";
-  value?: number;
-  note: string;
-}
-
-export interface VerifyNewsRequest {
-  url?: string;
-  text?: string;
-  title?: string;
-  social_sources?: string[];
-  limit_per_source?: number;
-}
-
-export interface VerifyNewsResponse {
-  original: Record<string, unknown>;
-  query_used: string;
-  related_posts: NewsItem[];
-  stats: VerificationStats;
-  signals: VerificationSignal[];
 }
 
 // ── User Profile (author, liker, reposter, reply author) ────────────────

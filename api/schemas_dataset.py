@@ -42,6 +42,7 @@ class DatasetResponse(BaseModel):
 
     file_size_bytes: int
     is_active: bool
+    active_split: Optional[str] = None
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -84,6 +85,11 @@ class DatasetStatsResponse(BaseModel):
 
     # Domain distribution (top 10 domains from news.csv)
     top_domains: list[dict] = []  # [{"domain": "...", "count": N}, ...]
+
+    # NEW: post-rebuild metrics
+    coverage_pct: Optional[float] = None  # % tweets with author profile
+    coverage_gap_fake_real: Optional[float] = None  # % gap FAKE vs REAL
+    synthetic_articles_count: Optional[int] = None
 
 
 class DatasetUpdate(BaseModel):

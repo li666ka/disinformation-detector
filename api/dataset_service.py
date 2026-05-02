@@ -52,6 +52,10 @@ VALID_LABELS = {"FAKE", "REAL"}
 # Safe filename pattern (prevent path traversal)
 SAFE_FILENAME_RE = re.compile(r"^[a-zA-Z0-9_.-]+$")
 
+# Splits structure: <splits_name>/split_<role>.csv where role ∈ {train, val, test}
+SPLIT_FOLDER_RE = re.compile(r"(?:^|/)(splits_[A-Za-z0-9_-]+)/split_(train|val|test)\.csv$")
+SPLIT_ROLES = ("train", "val", "test")
+
 
 # ── Exceptions ───────────────────────────────────────────────────────────
 
@@ -76,10 +80,18 @@ def ensure_user_folder(user_id: int) -> Path:
 
 # ── ZIP validation ───────────────────────────────────────────────────────
 
-def validate_zip_structure(zip_bytes: bytes) -> tuple[zipfile.ZipFile, dict[str, str]]:
+def validate_zip_structure(
+    zip_bytes: bytes,
+) -> tuple[zipfile.ZipFile, dict[str, str], dict[str, dict[str, str]]]:
     """
-    Open ZIP from bytes, verify basic structure. Returns the ZipFile and a
-    mapping {csv_name: internal_path_in_zip} for found files.
+    Open ZIP from bytes, verify basic structure.
+
+    Returns:
+        (zf, found, splits)
+
+        found: {basename.lower(): internal_path_in_zip} for the 7 known CSVs
+        splits: {<splits_name>: {role: internal_path}} for splits_*/split_<role>.csv folders.
+                Each split must contain all three of {train, val, test}; partial sets raise.
 
     Raises DatasetValidationError on any structural issue.
     """
@@ -97,21 +109,38 @@ def validate_zip_structure(zip_bytes: bytes) -> tuple[zipfile.ZipFile, dict[str,
     # Build index {basename: internal_path}, skipping directories and hidden files
     # This handles both `news.csv` at root AND `my-dataset/news.csv` inside a folder
     found: dict[str, str] = {}
+    splits: dict[str, dict[str, str]] = {}
     for info in zf.infolist():
         if info.is_dir():
             continue
         name = os.path.basename(info.filename)
         if not name or name.startswith(".") or name.startswith("__"):
             continue
+
+        # Path traversal protection — apply to всі шляхи нижче
+        if ".." in info.filename or info.filename.startswith("/"):
+            raise DatasetValidationError(f"Небезпечний шлях у ZIP: {info.filename}")
+
+        # Splits папки: <prefix>/splits_<name>/split_(train|val|test).csv
+        normalized = info.filename.replace("\\", "/")
+        m = SPLIT_FOLDER_RE.search(normalized)
+        if m:
+            split_name = m.group(1)[len("splits_"):]  # e.g. "in_domain"
+            role = m.group(2)
+            slot = splits.setdefault(split_name, {})
+            if role in slot:
+                raise DatasetValidationError(
+                    f"У ZIP знайдено кілька файлів split_{role}.csv для splits_{split_name}"
+                )
+            slot[role] = info.filename
+            continue
+
         if name.lower() in ALL_FILES:
             key = name.lower()
             if key in found:
                 raise DatasetValidationError(
                     f"У ZIP знайдено кілька файлів {key} — має бути один"
                 )
-            # Path traversal protection
-            if ".." in info.filename or info.filename.startswith("/"):
-                raise DatasetValidationError(f"Небезпечний шлях у ZIP: {info.filename}")
             found[key] = info.filename
 
     # Check required files
@@ -121,7 +150,15 @@ def validate_zip_structure(zip_bytes: bytes) -> tuple[zipfile.ZipFile, dict[str,
                 f"У ZIP не знайдено обов'язковий файл: {req}"
             )
 
-    return zf, found
+    # Validate splits completeness — кожен splits_<name>/ повинен мати всі три ролі
+    for split_name, roles in list(splits.items()):
+        missing = [r for r in SPLIT_ROLES if r not in roles]
+        if missing:
+            raise DatasetValidationError(
+                f"splits_{split_name}/ неповний: відсутні split_{', split_'.join(missing)}.csv"
+            )
+
+    return zf, found, splits
 
 
 def _read_csv_from_zip(zf: zipfile.ZipFile, internal_path: str) -> pd.DataFrame:
@@ -257,6 +294,30 @@ def save_dataset_files(
     return folder
 
 
+def save_dataset_splits(
+    folder: Path,
+    zf: zipfile.ZipFile,
+    splits: dict[str, dict[str, str]],
+) -> list[str]:
+    """
+    Write splits_<name>/split_<role>.csv files into the dataset folder.
+
+    Reads raw bytes from the ZIP (no pandas parsing — a split file may carry
+    different columns than news.csv: at minimum article_id + label, sometimes
+    a precomputed text/feature snapshot). Returns the list of split names saved.
+    """
+    saved: list[str] = []
+    for split_name, roles in splits.items():
+        out_dir = folder / f"splits_{split_name}"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        for role, internal_path in roles.items():
+            with zf.open(internal_path) as src:
+                data = src.read()
+            (out_dir / f"split_{role}.csv").write_bytes(data)
+        saved.append(split_name)
+    return saved
+
+
 def delete_dataset_folder(folder_path: str) -> None:
     """Remove dataset folder from disk. Idempotent."""
     p = Path(folder_path)
@@ -388,10 +449,24 @@ def compute_detailed_stats(folder_path: str) -> dict:
             if basic["total"] > 0:
                 result["news_with_tweets_pct"] = float(news_with_tweets / basic["total"] * 100)
 
-    # Engagement
+    # Engagement — handle both legacy (likes.csv) and post-rebuild (like_count column)
     likes_path = folder / "likes.csv"
+    tweets_path_for_likes = folder / "tweets.csv"
+
     if likes_path.exists():
+        # Legacy format: count rows у likes.csv
         result["total_likes"] = int(len(pd.read_csv(likes_path)))
+    elif tweets_path_for_likes.exists():
+        # Post-rebuild: sum like_count з усіх engagement files
+        total_likes = 0
+        for fname in ("tweets.csv", "retweets.csv", "replies.csv"):
+            fpath = folder / fname
+            if fpath.exists():
+                df_tmp = pd.read_csv(fpath, usecols=lambda c: c == "like_count", low_memory=False)
+                if "like_count" in df_tmp.columns:
+                    total_likes += int(df_tmp["like_count"].fillna(0).sum())
+        if total_likes > 0:
+            result["total_likes"] = total_likes
 
     retweets_path = folder / "retweets.csv"
     if retweets_path.exists():
@@ -431,13 +506,35 @@ def compute_detailed_stats(folder_path: str) -> dict:
 # ── Component detection ──────────────────────────────────────────────────
 
 def detect_components(dataframes: dict[str, pd.DataFrame]) -> dict[str, bool]:
-    """Return {component_name: bool} indicating which CSVs are non-empty."""
+    """Return {component_name: bool} indicating which CSVs/columns are present.
+
+    Note: has_likes is True if EITHER:
+      - likes.csv exists with rows (legacy format)
+      - like_count column exists in tweets/retweets/replies (post-rebuild)
+    """
+    # Check legacy likes.csv format
+    has_likes_csv = "likes.csv" in dataframes and len(dataframes["likes.csv"]) > 0
+
+    # Check new format: like_count column in any engagement CSV
+    # Cast to numeric — CSV reader може зберегти як string якщо дочитує з dtype=str
+    has_likes_column = False
+    for fname in ("tweets.csv", "retweets.csv", "replies.csv"):
+        if fname in dataframes and "like_count" in dataframes[fname].columns:
+            try:
+                col = pd.to_numeric(dataframes[fname]["like_count"], errors="coerce")
+                if col.fillna(0).sum() > 0:
+                    has_likes_column = True
+                    break
+            except Exception:
+                # If conversion fails, treat as no likes
+                continue
+
     return {
         "has_news": "news.csv" in dataframes and len(dataframes["news.csv"]) > 0,
         "has_tweets": "tweets.csv" in dataframes and len(dataframes["tweets.csv"]) > 0,
         "has_retweets": "retweets.csv" in dataframes and len(dataframes["retweets.csv"]) > 0,
         "has_replies": "replies.csv" in dataframes and len(dataframes["replies.csv"]) > 0,
-        "has_likes": "likes.csv" in dataframes and len(dataframes["likes.csv"]) > 0,
+        "has_likes": has_likes_csv or has_likes_column,
         "has_users": "users.csv" in dataframes and len(dataframes["users.csv"]) > 0,
         "has_evidence": "evidence.csv" in dataframes and len(dataframes["evidence.csv"]) > 0,
     }

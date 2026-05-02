@@ -25,7 +25,6 @@ from api.sources import (
     get_all_sources,
     get_source,
 )
-from api.sources.cross_platform import verify_news
 
 logger = logging.getLogger(__name__)
 
@@ -43,23 +42,6 @@ class SourceSearchResponse(BaseModel):
 class FetchUrlRequest(BaseModel):
     url: str  # не HttpUrl — щоб не падати при неочікуваних схемах
 
-
-class VerifyNewsRequest(BaseModel):
-    """Запит на крос-платформну верифікацію новини."""
-    post_id: Optional[str] = None       # якщо вже є id існуючого поста
-    url: Optional[str] = None           # або URL для fetch
-    text: Optional[str] = None          # або просто текст
-    title: Optional[str] = None         # заголовок (для RSS)
-    social_sources: list[str] = ["bluesky", "mastodon"]
-    limit_per_source: int = 10
-
-
-class VerifyNewsResponse(BaseModel):
-    original: dict
-    query_used: str
-    related_posts: list[dict]
-    stats: dict
-    signals: list[dict]
 
 class PostDetailsResponse(BaseModel):
     post: dict
@@ -242,82 +224,6 @@ async def fetch_by_url(
         detail="Не вдалося знайти джерело для цього URL або пост відсутній",
     )
 
-
-@router.post("/verify-news", response_model=VerifyNewsResponse)
-async def verify_news_endpoint(
-    req: VerifyNewsRequest,
-    current_user: User = Depends(get_current_user),
-):
-    """
-    Крос-платформна верифікація новини.
-
-    Приймає новину (за URL, текстом або id) і шукає згадки/обговорення
-    у соцмережах (Bluesky, Mastodon). Повертає related posts, статистику
-    та сигнали довіри/підозрілості.
-    """
-    # Побудувати NewsItem з вхідних даних
-    if req.url:
-        # Спробувати fetch за URL
-        all_sources = get_all_sources()
-        ordered_sources = sorted(
-            all_sources,
-            key=lambda s: 0 if s.source_name != "rss" else 1,
-        )
-        news_item = None
-        for src in ordered_sources:
-            if not src.can_handle_url(req.url):
-                continue
-            try:
-                news_item = await src.fetch_by_url(req.url)
-                if news_item:
-                    break
-            except SourceError:
-                continue
-
-        if not news_item:
-            # Fallback: створити мінімальний NewsItem з URL і тексту
-            news_item = NewsItem(
-                id="manual:url",
-                source="manual",
-                url=req.url,
-                text=req.text or req.url,
-                title=req.title,
-            )
-    elif req.title:
-        news_item = NewsItem(
-            id="manual:title",
-            source="manual",
-            url="",
-            text=req.title,
-            title=req.title,
-        )
-    elif req.text:
-        news_item = NewsItem(
-            id="manual:text",
-            source="manual",
-            url="",
-            text=req.text,
-            title=req.title,
-        )
-    else:
-        raise HTTPException(
-            status_code=400,
-            detail="Потрібно вказати url, title або text для верифікації",
-        )
-
-    # Валідація social_sources
-    valid_social = {"bluesky", "mastodon"}
-    social = [s for s in req.social_sources if s in valid_social]
-    if not social:
-        social = ["bluesky", "mastodon"]
-
-    result = await verify_news(
-        news_item=news_item,
-        social_sources=social,
-        limit_per_source=req.limit_per_source,
-    )
-
-    return VerifyNewsResponse(**result)
 
 # ── GET /sources/post-details ────────────────────────────────────────────
 

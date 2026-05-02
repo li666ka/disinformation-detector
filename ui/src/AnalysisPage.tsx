@@ -1,23 +1,65 @@
-import React, { useEffect, useState } from "react";
+// ui/src/AnalysisPage.tsx
+import React, { useEffect, useMemo, useState } from "react";
 import api from "./api";
 import { cn } from "./lib/utils";
 import { Button } from "./components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "./components/ui/card";
 import { Textarea } from "./components/ui/textarea";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./components/ui/select";
-import { AlertTriangle, CheckCircle2, Loader2, Search } from "lucide-react";
+import { Badge } from "./components/ui/badge";
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectLabel,
+  SelectSeparator,
+  SelectTrigger,
+  SelectValue,
+} from "./components/ui/select";
+import {
+  AlertTriangle,
+  CheckCircle2,
+  HelpCircle,
+  Loader2,
+  Search,
+  Brain,
+  Sparkles,
+  Cpu,
+} from "lucide-react";
 import { toast } from "sonner";
 import type { ModelRecord } from "./types";
 
 interface AnalyzeResult {
-  label: "FAKE" | "REAL";
+  label: "FAKE" | "REAL" | "UNCERTAIN";
   confidence: number;
-  probability: number;
+  probability: number | null;
+  reason?: string;
+  base_model_used?: string;
+  mode?: string;
 }
 
 interface AnalysisPageProps {
   onDeepCheckRequest?: (text: string) => void;
 }
+
+// Icon per model type
+const TYPE_ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
+  nb: Cpu,
+  deberta: Brain,
+  distilbert: Brain,
+  llm: Sparkles,
+  gin: Brain,
+  sage: Brain,
+};
+
+const TYPE_LABELS: Record<string, string> = {
+  nb: "Naive Bayes",
+  deberta: "DeBERTa",
+  distilbert: "DistilBERT",
+  llm: "LLM (Gemini)",
+  gin: "GIN",
+  sage: "GraphSAGE",
+};
 
 export default function AnalysisPage({ onDeepCheckRequest }: AnalysisPageProps = {}) {
   const [models, setModels] = useState<ModelRecord[]>([]);
@@ -28,24 +70,58 @@ export default function AnalysisPage({ onDeepCheckRequest }: AnalysisPageProps =
   const [loadingModels, setLoadingModels] = useState<boolean>(true);
 
   useEffect(() => {
-    api.get("/models")
-      .then(({ data }) => {
-        setModels(data);
-        if (data.length > 0) setModelId(data[0].id);
-      })
-      .catch(() => {})
-      .finally(() => setLoadingModels(false));
+    loadModels();
   }, []);
 
+  const loadModels = () => {
+    setLoadingModels(true);
+    api
+      .get<ModelRecord[]>("/models")
+      .then(({ data }) => {
+        setModels(data);
+        // Auto-select first trained model (prefer non-LLM since it has accuracy),
+        // else first LLM
+        const firstTrained = data.find((m) => m.model_type !== "llm");
+        const firstLLM = data.find((m) => m.model_type === "llm");
+        const initial = firstTrained || firstLLM;
+        if (initial) setModelId(initial.id);
+      })
+      .catch(() => { })
+      .finally(() => setLoadingModels(false));
+  };
+
+  // Group models by type (trained ML vs LLM presets)
+  const { trainedModels, llmPresets } = useMemo(() => {
+    const trained = models.filter((m) => m.model_type !== "llm");
+    const llm = models.filter((m) => m.model_type === "llm");
+    return { trainedModels: trained, llmPresets: llm };
+  }, [models]);
+
+  const selectedModel = models.find((m) => m.id === modelId);
+  const isLLMSelected = selectedModel?.model_type === "llm";
+
   const handleSubmit = async () => {
-    if (!text.trim()) { toast.error("Введіть текст для аналізу"); return; }
-    if (!modelId) { toast.error("Оберіть модель"); return; }
+    if (!text.trim()) {
+      toast.error("Введіть текст для аналізу");
+      return;
+    }
+    if (!modelId) {
+      toast.error("Оберіть модель");
+      return;
+    }
 
     setLoading(true);
     setResult(null);
     try {
-      const { data } = await api.post("/analyze", { text, model_id: modelId });
+      const { data } = await api.post<AnalyzeResult>("/analyze", {
+        text,
+        model_id: modelId,
+      });
       setResult(data);
+
+      if (data.label === "UNCERTAIN") {
+        toast.warning("Модель не змогла дати впевнену оцінку");
+      }
     } catch (err: any) {
       const detail = err.response?.data?.detail;
       toast.error(typeof detail === "string" ? detail : "Помилка під час аналізу");
@@ -55,13 +131,15 @@ export default function AnalysisPage({ onDeepCheckRequest }: AnalysisPageProps =
   };
 
   const isFake = result?.label === "FAKE";
-  const selectedModel = models.find((m) => m.id === modelId);
+  const isUncertain = result?.label === "UNCERTAIN";
 
   return (
     <div className="space-y-6 max-w-2xl mx-auto">
       <div>
         <h2 className="text-2xl font-bold tracking-tight">Аналіз тексту</h2>
-        <p className="text-muted-foreground">Перевірте текст на ознаки дезінформації</p>
+        <p className="text-muted-foreground">
+          Перевірте текст на ознаки дезінформації за допомогою обраної моделі
+        </p>
       </div>
 
       {/* Model Selection */}
@@ -76,32 +154,88 @@ export default function AnalysisPage({ onDeepCheckRequest }: AnalysisPageProps =
               Завантаження моделей...
             </div>
           ) : models.length === 0 ? (
-            <p className="text-sm text-muted-foreground">
-              Навчених моделей немає. Спочатку навчіть модель на вкладці "Навчання моделі".
-            </p>
+            <div className="space-y-2 text-sm text-muted-foreground">
+              <p>Немає доступних моделей.</p>
+              <p className="text-xs">
+                Натренуйте модель у розділі <strong>"Навчання моделі"</strong> або створіть{" "}
+                <strong>LLM пресет</strong>.
+              </p>
+            </div>
           ) : (
             <div className="space-y-2">
               <Select
                 value={modelId?.toString() || ""}
-                onValueChange={(v) => { setModelId(Number(v)); setResult(null); }}
+                onValueChange={(v) => {
+                  setModelId(Number(v));
+                  setResult(null);
+                }}
               >
-                <SelectTrigger className="max-w-sm">
+                <SelectTrigger className="max-w-md">
                   <SelectValue placeholder="Оберіть модель" />
                 </SelectTrigger>
                 <SelectContent>
-                  {models.map((m) => (
-                    <SelectItem key={m.id} value={m.id.toString()}>
-                      {m.name || m.model_type}
-                      {m.accuracy != null ? ` — ${(m.accuracy * 100).toFixed(1)}%` : ""}
-                    </SelectItem>
-                  ))}
+                  {trainedModels.length > 0 && (
+                    <SelectGroup>
+                      <SelectLabel className="flex items-center gap-1.5 text-xs">
+                        <Brain className="h-3 w-3" />
+                        Натреновані моделі
+                      </SelectLabel>
+                      {trainedModels.map((m) => {
+                        const Icon = TYPE_ICONS[m.model_type] || Cpu;
+                        return (
+                          <SelectItem key={m.id} value={m.id.toString()}>
+                            <span className="flex items-center gap-2">
+                              <Icon className="h-3.5 w-3.5 shrink-0" />
+                              <span className="truncate">{m.name || m.model_type}</span>
+                              {m.accuracy != null && (
+                                <span className="text-xs text-muted-foreground">
+                                  {(m.accuracy * 100).toFixed(1)}%
+                                </span>
+                              )}
+                            </span>
+                          </SelectItem>
+                        );
+                      })}
+                    </SelectGroup>
+                  )}
+
+                  {trainedModels.length > 0 && llmPresets.length > 0 && <SelectSeparator />}
+
+                  {llmPresets.length > 0 && (
+                    <SelectGroup>
+                      <SelectLabel className="flex items-center gap-1.5 text-xs">
+                        <Sparkles className="h-3 w-3" />
+                        LLM пресети
+                      </SelectLabel>
+                      {llmPresets.map((m) => (
+                        <SelectItem key={m.id} value={m.id.toString()}>
+                          <span className="flex items-center gap-2">
+                            <Sparkles className="h-3.5 w-3.5 shrink-0" />
+                            <span className="truncate">{m.name}</span>
+                          </span>
+                        </SelectItem>
+                      ))}
+                    </SelectGroup>
+                  )}
                 </SelectContent>
               </Select>
+
               {selectedModel && (
-                <p className="text-xs text-muted-foreground">
-                  Тип: <strong>{selectedModel.model_type}</strong>
-                  {selectedModel.accuracy != null && <> · Accuracy: <strong>{(selectedModel.accuracy * 100).toFixed(1)}%</strong></>}
-                </p>
+                <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                  <Badge variant="secondary" className="font-normal">
+                    {TYPE_LABELS[selectedModel.model_type] || selectedModel.model_type}
+                  </Badge>
+                  {selectedModel.accuracy != null && (
+                    <span>
+                      Accuracy: <strong>{(selectedModel.accuracy * 100).toFixed(1)}%</strong>
+                    </span>
+                  )}
+                  {isLLMSelected && (
+                    <span className="italic">
+                      LLM — результат без числових метрик (не тренувалась на цьому датасеті)
+                    </span>
+                  )}
+                </div>
               )}
             </div>
           )}
@@ -127,7 +261,11 @@ export default function AnalysisPage({ onDeepCheckRequest }: AnalysisPageProps =
             disabled={loading || models.length === 0}
           >
             {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-            {loading ? "Аналіз..." : "Аналізувати"}
+            {loading
+              ? isLLMSelected
+                ? "LLM думає..."
+                : "Аналіз..."
+              : "Аналізувати"}
           </Button>
         </CardContent>
       </Card>
@@ -135,39 +273,80 @@ export default function AnalysisPage({ onDeepCheckRequest }: AnalysisPageProps =
       {/* Verdict */}
       {result && (
         <>
-          <Card className={cn(
-            "border-2",
-            isFake ? "border-red-500 bg-red-50 dark:bg-red-950/20" : "border-green-500 bg-green-50 dark:bg-green-950/20",
-          )}>
+          <Card
+            className={cn(
+              "border-2",
+              isFake
+                ? "border-red-500 bg-red-50 dark:bg-red-950/20"
+                : isUncertain
+                  ? "border-amber-500 bg-amber-50 dark:bg-amber-950/20"
+                  : "border-green-500 bg-green-50 dark:bg-green-950/20",
+            )}
+          >
             <CardContent className="py-8 text-center">
               {isFake ? (
                 <AlertTriangle className="h-12 w-12 text-red-500 mx-auto mb-3" />
+              ) : isUncertain ? (
+                <HelpCircle className="h-12 w-12 text-amber-500 mx-auto mb-3" />
               ) : (
                 <CheckCircle2 className="h-12 w-12 text-green-500 mx-auto mb-3" />
               )}
-              <h2 className={cn(
-                "text-3xl font-bold",
-                isFake ? "text-red-600 dark:text-red-400" : "text-green-600 dark:text-green-400"
-              )}>
-                {isFake ? "ДЕЗІНФОРМАЦІЯ" : "ДОСТОВІРНО"}
+              <h2
+                className={cn(
+                  "text-3xl font-bold",
+                  isFake
+                    ? "text-red-600 dark:text-red-400"
+                    : isUncertain
+                      ? "text-amber-600 dark:text-amber-400"
+                      : "text-green-600 dark:text-green-400",
+                )}
+              >
+                {isFake
+                  ? "ДЕЗІНФОРМАЦІЯ"
+                  : isUncertain
+                    ? "НЕВИЗНАЧЕНО"
+                    : "ДОСТОВІРНО"}
               </h2>
-              <p className="text-muted-foreground mt-2">
-                Впевненість: {(result.confidence * 100).toFixed(1)}%
-              </p>
+              {!isUncertain && (
+                <p className="text-muted-foreground mt-2">
+                  Впевненість: {(result.confidence * 100).toFixed(1)}%
+                </p>
+              )}
+              {isUncertain && result.reason && (
+                <p className="text-sm text-amber-700 dark:text-amber-400 mt-3 max-w-md mx-auto italic">
+                  "{result.reason}"
+                </p>
+              )}
             </CardContent>
           </Card>
 
+          {/* LLM reasoning (якщо модель дала reason) */}
+          {!isUncertain && result.reason && (
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-sm flex items-center gap-2">
+                  <Sparkles className="h-4 w-4" />
+                  Обґрунтування моделі
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <p className="text-sm text-muted-foreground italic leading-relaxed">
+                  "{result.reason}"
+                </p>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Cross-link to deep verification */}
           <Card className="border-dashed">
             <CardContent className="py-4">
               <div className="flex items-start gap-3">
                 <Search className="h-5 w-5 text-muted-foreground shrink-0 mt-0.5" />
                 <div className="flex-1 space-y-2">
-                  <p className="text-sm font-medium">
-                    Потрібна детальніша перевірка?
-                  </p>
+                  <p className="text-sm font-medium">Потрібна детальніша перевірка?</p>
                   <p className="text-xs text-muted-foreground">
-                    Запустити multi-hop верифікацію: витягування тверджень, пошук доказів
-                    у новинах та соцмережах, аналіз консистентності.
+                    Запустити multi-hop верифікацію: витягування тверджень, пошук доказів у
+                    новинах та соцмережах, аналіз консистентності.
                   </p>
                   <Button
                     variant="outline"
@@ -177,7 +356,9 @@ export default function AnalysisPage({ onDeepCheckRequest }: AnalysisPageProps =
                         onDeepCheckRequest(text);
                       } else {
                         navigator.clipboard.writeText(text);
-                        toast.info("Текст скопійовано. Вставте у вкладці 'Верифікація'.");
+                        toast.info(
+                          "Текст скопійовано. Вставте у вкладці 'Верифікація'.",
+                        );
                       }
                     }}
                   >
@@ -188,25 +369,43 @@ export default function AnalysisPage({ onDeepCheckRequest }: AnalysisPageProps =
               </div>
             </CardContent>
           </Card>
-        </>
-      )}
 
-      {/* Details */}
-      {result && (
-        <Card>
-          <CardContent className="p-4">
-            <ul className="space-y-2 text-sm">
-              <li className="flex justify-between py-1 border-b border-border">
-                <span className="font-medium">Модель</span>
-                <span className="text-muted-foreground">{selectedModel?.name || selectedModel?.model_type}</span>
-              </li>
-              <li className="flex justify-between py-1">
-                <span className="font-medium">Ймовірність FAKE</span>
-                <span className="text-muted-foreground">{(result.probability * 100).toFixed(1)}%</span>
-              </li>
-            </ul>
-          </CardContent>
-        </Card>
+          {/* Details */}
+          <Card>
+            <CardContent className="p-4">
+              <ul className="space-y-1.5 text-sm">
+                <li className="flex justify-between py-1 border-b border-border">
+                  <span className="font-medium">Модель</span>
+                  <span className="text-muted-foreground text-right">
+                    {selectedModel?.name || selectedModel?.model_type}
+                  </span>
+                </li>
+                {result.probability != null && (
+                  <li className="flex justify-between py-1 border-b border-border">
+                    <span className="font-medium">Ймовірність FAKE</span>
+                    <span className="text-muted-foreground">
+                      {(result.probability * 100).toFixed(1)}%
+                    </span>
+                  </li>
+                )}
+                {result.base_model_used && (
+                  <li className="flex justify-between py-1 border-b border-border">
+                    <span className="font-medium">Базова модель</span>
+                    <span className="text-muted-foreground">{result.base_model_used}</span>
+                  </li>
+                )}
+                {result.mode && (
+                  <li className="flex justify-between py-1">
+                    <span className="font-medium">Режим</span>
+                    <Badge variant="outline" className="text-xs">
+                      {result.mode}
+                    </Badge>
+                  </li>
+                )}
+              </ul>
+            </CardContent>
+          </Card>
+        </>
       )}
     </div>
   );

@@ -3,8 +3,9 @@
 Stance Detection — для кожного evidence визначити чи він підтримує/спростовує
 /не пов'язаний з claim.
 
-Використовує Gemini LLM. Працює batch-ом — обробляє до N evidence за 1 виклик,
-щоб економити токени/час.
+Викликає Claude напряму через `claude -p` subprocess
+(api.llm_predictor._call_claude_cli). Працює batch-ом — обробляє до N
+evidence за 1 виклик, щоб економити токени/час.
 
 Вхід:
     claim: Claim
@@ -68,7 +69,7 @@ async def detect_stance_batch(
         return evidence_list
 
     try:
-        from api.llm_predictor import _get_client, _call_gemini_raw, DEFAULT_BASE_MODEL
+        from api.llm_predictor import _call_claude_cli  # noqa: F401  — sanity import
     except ImportError as e:
         logger.error(f"Cannot import llm_predictor: {e}")
         for ev in evidence_list:
@@ -77,38 +78,31 @@ async def detect_stance_batch(
             ev.stance_reasoning = "stance detection unavailable"
         return evidence_list
 
-    try:
-        client, types = _get_client()
-    except Exception as e:
-        logger.error(f"Failed to init Gemini client: {e}")
-        for ev in evidence_list:
-            ev.stance = "unknown"
-        return evidence_list
-
     # Обробляємо батчами
     for i in range(0, len(evidence_list), batch_size):
         batch = evidence_list[i:i + batch_size]
-        await _process_batch(client, types, claim, batch)
+        await _process_batch(claim, batch)
 
     return evidence_list
 
 
-async def _process_batch(client, types, claim: Claim, batch: list[Evidence]):
-    """Обробити один batch: викликати LLM, розпарсити, заповнити stance."""
+async def _process_batch(claim: Claim, batch: list[Evidence]):
+    """Обробити один batch: викликати Claude CLI, розпарсити, заповнити stance."""
     user_prompt = _build_batch_prompt(claim, batch)
+    full_prompt = f"{STANCE_DETECTION_PROMPT}\n\n{user_prompt}"
 
     try:
-        from api.llm_predictor import _call_gemini_raw, DEFAULT_BASE_MODEL
-        raw_text, model_used = _call_gemini_raw(
-            client, types,
-            base_model=DEFAULT_BASE_MODEL,
-            system_prompt=STANCE_DETECTION_PROMPT,
-            user_prompt=user_prompt,
-            temperature=0.0,
-            max_output_tokens=min(1500, 200 * len(batch)),
-        )
+        from api.llm_predictor import _call_claude_cli, ClaudeCLIError, DEFAULT_BASE_MODEL
+        raw_text = _call_claude_cli(full_prompt, model=DEFAULT_BASE_MODEL)
+    except ClaudeCLIError as e:
+        logger.warning(f"Stance Claude CLI call failed: {e}")
+        for ev in batch:
+            ev.stance = "unknown"
+            ev.stance_confidence = 0.0
+            ev.stance_reasoning = f"LLM error: {str(e)[:100]}"
+        return
     except Exception as e:
-        logger.warning(f"Stance LLM call failed: {e}")
+        logger.warning(f"Stance unexpected error: {e}")
         for ev in batch:
             ev.stance = "unknown"
             ev.stance_confidence = 0.0

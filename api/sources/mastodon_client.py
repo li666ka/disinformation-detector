@@ -260,8 +260,8 @@ class MastodonSource(BaseNewsSource):
             client = self._get_client()
             all_accounts = []
             try:
-                # Mastodon.py paginates via max_id
-                page = client.status_reblogged_by(status_id, limit=min(40, max_reposters))
+                # Mastodon.py paginates via fetch_next; status_reblogged_by has no `limit` param
+                page = client.status_reblogged_by(status_id)
                 while page and len(all_accounts) < max_reposters:
                     all_accounts.extend(page)
                     if len(all_accounts) >= max_reposters:
@@ -287,7 +287,8 @@ class MastodonSource(BaseNewsSource):
             client = self._get_client()
             all_accounts = []
             try:
-                page = client.status_favourited_by(status_id, limit=min(40, max_likers))
+                # status_favourited_by does not accept a `limit` kwarg in Mastodon.py
+                page = client.status_favourited_by(status_id)
                 while page and len(all_accounts) < max_likers:
                     all_accounts.extend(page)
                     if len(all_accounts) >= max_likers:

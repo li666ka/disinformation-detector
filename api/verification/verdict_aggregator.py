@@ -14,6 +14,7 @@ Verdict Aggregation — фінальний крок pipeline.
 """
 from __future__ import annotations
 
+import json
 import logging
 import time
 from typing import Optional
@@ -186,25 +187,22 @@ async def llm_based_verdict(
         return rule_fallback or rule_based_verdict(claim, evidence)
 
     try:
-        from api.llm_predictor import _get_client, _call_gemini_raw, DEFAULT_BASE_MODEL
-        client, types = _get_client()
+        from api.llm_predictor import _call_claude_cli, ClaudeCLIError, DEFAULT_BASE_MODEL
     except Exception as e:
         logger.warning(f"LLM unavailable for verdict, falling back to rules: {e}")
         return rule_fallback or rule_based_verdict(claim, evidence)
 
     prompt = _build_verdict_prompt(claim, evidence)
+    full_prompt = f"{VERDICT_PROMPT}\n\n{prompt}"
+    model_used = DEFAULT_BASE_MODEL
 
     try:
-        raw_text, model_used = _call_gemini_raw(
-            client, types,
-            base_model=DEFAULT_BASE_MODEL,
-            system_prompt=VERDICT_PROMPT,
-            user_prompt=prompt,
-            temperature=0.0,
-            max_output_tokens=500,
-        )
+        raw_text = _call_claude_cli(full_prompt, model=DEFAULT_BASE_MODEL)
+    except ClaudeCLIError as e:
+        logger.warning(f"Verdict Claude CLI call failed: {e}")
+        return rule_fallback or rule_based_verdict(claim, evidence)
     except Exception as e:
-        logger.warning(f"LLM verdict call failed: {e}")
+        logger.warning(f"Verdict unexpected error: {e}")
         return rule_fallback or rule_based_verdict(claim, evidence)
 
     # Parse the raw JSON response {label, confidence, reasoning}

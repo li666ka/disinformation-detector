@@ -20,10 +20,15 @@ import {
 import {
   Database, Upload, Download, Trash2, CheckCircle2, MoreVertical,
   FileText, Users, MessageCircle, Heart, Repeat2, Loader2, BarChart3,
-  Edit3, AlertTriangle, Shield,
+  Edit3, AlertTriangle, Shield, TrendingUp, Info,
 } from "lucide-react";
+import {
+  Tooltip, TooltipContent, TooltipProvider, TooltipTrigger,
+} from "./components/ui/tooltip";
 import { toast } from "sonner";
 import type { Dataset, DatasetUploadResponse, DatasetStats } from "./types";
+import AnalyticsModal from "./AnalyticsModal";
+import SplitsSection from "./components/SplitsSection";
 
 function formatBytes(bytes: number): string {
   if (bytes === 0) return "0 B";
@@ -37,14 +42,26 @@ function formatDate(iso: string): string {
   return new Date(iso).toLocaleString("uk-UA");
 }
 
-const COMPONENT_BADGES: { key: keyof Dataset; label: string; icon: any }[] = [
-  { key: "has_news", label: "News", icon: FileText },
-  { key: "has_tweets", label: "Tweets", icon: MessageCircle },
-  { key: "has_users", label: "Users", icon: Users },
-  { key: "has_replies", label: "Replies", icon: MessageCircle },
-  { key: "has_likes", label: "Likes", icon: Heart },
-  { key: "has_retweets", label: "Retweets", icon: Repeat2 },
-  { key: "has_evidence", label: "Evidence", icon: Shield },
+const COMPONENT_BADGES: {
+  key: keyof Dataset;
+  label: string;
+  icon: any;
+  description: string;
+}[] = [
+  { key: "has_news", label: "News", icon: FileText,
+    description: "Тексти статей з мітками FAKE/REAL" },
+  { key: "has_tweets", label: "Tweets", icon: MessageCircle,
+    description: "Твіти що поширювали статті" },
+  { key: "has_users", label: "Users", icon: Users,
+    description: "Профілі користувачів (followers, account_age, verified...)" },
+  { key: "has_replies", label: "Replies", icon: MessageCircle,
+    description: "Відповіді на твіти" },
+  { key: "has_likes", label: "Likes", icon: Heart,
+    description: "Лайки твітів — як окремий файл або колонка like_count у tweets/retweets/replies" },
+  { key: "has_retweets", label: "Retweets", icon: Repeat2,
+    description: "Ретвіти оригінальних твітів" },
+  { key: "has_evidence", label: "Evidence", icon: Shield,
+    description: "Зовнішні факт-чек джерела" },
 ];
 
 export default function DatasetsPage() {
@@ -64,6 +81,9 @@ export default function DatasetsPage() {
   const [statsDataset, setStatsDataset] = useState<Dataset | null>(null);
   const [stats, setStats] = useState<DatasetStats | null>(null);
   const [statsLoading, setStatsLoading] = useState(false);
+
+  // Analytics modal
+  const [analyticsDataset, setAnalyticsDataset] = useState<Dataset | null>(null);
 
   // Rename modal
   const [renameOpen, setRenameOpen] = useState(false);
@@ -200,6 +220,11 @@ export default function DatasetsPage() {
         </div>
       </div>
 
+      {/* Splits selector for active dataset */}
+      {datasets.filter((d) => d.is_active).map((d) => (
+        <SplitsSection key={d.id} dataset={d} onChange={fetchDatasets} />
+      ))}
+
       {/* Content */}
       {datasets.length === 0 ? (
         <div className="text-center py-16">
@@ -249,15 +274,28 @@ export default function DatasetsPage() {
                     <span className="text-green-600 dark:text-green-400 font-medium">{ds.real_count}</span>
                   </TableCell>
                   <TableCell>
-                    <div className="flex flex-wrap gap-1">
-                      {COMPONENT_BADGES.map(({ key, label }) =>
-                        ds[key] ? (
-                          <Badge key={key} variant="secondary" className="text-[10px] px-1.5 py-0">
-                            {label}
-                          </Badge>
-                        ) : null
-                      )}
-                    </div>
+                    <TooltipProvider delayDuration={300}>
+                      <div className="flex flex-wrap gap-1">
+                        {COMPONENT_BADGES.map(({ key, label, icon: Icon, description }) =>
+                          ds[key] ? (
+                            <Tooltip key={key}>
+                              <TooltipTrigger asChild>
+                                <Badge
+                                  variant="secondary"
+                                  className="text-[10px] px-1.5 py-0 cursor-help inline-flex items-center gap-1"
+                                >
+                                  <Icon className="h-2.5 w-2.5" />
+                                  {label}
+                                </Badge>
+                              </TooltipTrigger>
+                              <TooltipContent side="top" className="text-xs max-w-xs">
+                                {description}
+                              </TooltipContent>
+                            </Tooltip>
+                          ) : null
+                        )}
+                      </div>
+                    </TooltipProvider>
                   </TableCell>
                   <TableCell className="text-right text-sm">
                     {formatBytes(ds.file_size_bytes)}
@@ -286,6 +324,9 @@ export default function DatasetsPage() {
                             <CheckCircle2 className="mr-2 h-4 w-4" /> Активувати
                           </DropdownMenuItem>
                         )}
+                        <DropdownMenuItem onClick={() => setAnalyticsDataset(ds)}>
+                          <BarChart3 className="mr-2 h-4 w-4" /> Аналітика
+                        </DropdownMenuItem>
                         <DropdownMenuItem onClick={() => handleShowStats(ds)}>
                           <BarChart3 className="mr-2 h-4 w-4" /> Статистика
                         </DropdownMenuItem>
@@ -319,7 +360,7 @@ export default function DatasetsPage() {
           <DialogHeader>
             <DialogTitle>Завантажити датасет</DialogTitle>
             <DialogDescription>
-              Очікується ZIP з файлами news.csv (обов'язково) + опц. tweets.csv, users.csv та ін.
+              Очікується ZIP з файлами .csv
             </DialogDescription>
           </DialogHeader>
 
@@ -565,6 +606,45 @@ export default function DatasetsPage() {
                 </div>
               )}
 
+              {/* Engagement section — показує total counts */}
+              {(stats.total_likes != null || stats.total_retweets != null || stats.total_replies != null) && (
+                <div>
+                  <p className="text-sm font-medium mb-2 flex items-center gap-1">
+                    <TrendingUp className="h-3.5 w-3.5" />
+                    Engagement
+                  </p>
+                  <div className="grid grid-cols-3 gap-2 text-center text-xs">
+                    {stats.total_likes != null && (
+                      <div className="p-2 bg-muted rounded">
+                        <p className="font-semibold flex items-center justify-center gap-1">
+                          <Heart className="h-3 w-3 text-red-500" />
+                          {stats.total_likes.toLocaleString()}
+                        </p>
+                        <p className="text-muted-foreground">Лайки</p>
+                      </div>
+                    )}
+                    {stats.total_retweets != null && (
+                      <div className="p-2 bg-muted rounded">
+                        <p className="font-semibold flex items-center justify-center gap-1">
+                          <Repeat2 className="h-3 w-3 text-blue-500" />
+                          {stats.total_retweets.toLocaleString()}
+                        </p>
+                        <p className="text-muted-foreground">Ретвіти</p>
+                      </div>
+                    )}
+                    {stats.total_replies != null && (
+                      <div className="p-2 bg-muted rounded">
+                        <p className="font-semibold flex items-center justify-center gap-1">
+                          <MessageCircle className="h-3 w-3 text-amber-500" />
+                          {stats.total_replies.toLocaleString()}
+                        </p>
+                        <p className="text-muted-foreground">Відповіді</p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
               {/* Top domains */}
               {stats.top_domains && stats.top_domains.length > 0 && (
                 <div>
@@ -593,6 +673,16 @@ export default function DatasetsPage() {
           ) : null}
         </DialogContent>
       </Dialog>
+
+      {/* ── Analytics Modal ────────────────────────────────────────────── */}
+      {analyticsDataset && (
+        <AnalyticsModal
+          open={!!analyticsDataset}
+          onClose={() => setAnalyticsDataset(null)}
+          datasetId={analyticsDataset.id}
+          datasetName={analyticsDataset.name}
+        />
+      )}
 
       {/* ── Rename Dialog ──────────────────────────────────────────────── */}
       <Dialog open={renameOpen} onOpenChange={setRenameOpen}>

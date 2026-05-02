@@ -32,6 +32,7 @@ class Claim:
     entities: list[str] = field(default_factory=list)  # Key entities: ["Pfizer", "vaccine", "autism"]
     verifiable: bool = True                   # Чи можна це перевірити fact-wise
     original_text: Optional[str] = None       # Оригінальний текст, з якого витягнуто
+    stance: Literal["supports", "refutes", "neutral"] = "neutral"  # позиція автора щодо claim
 
     def to_dict(self) -> dict:
         return asdict(self)

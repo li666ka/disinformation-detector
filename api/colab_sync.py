@@ -65,17 +65,23 @@ def dataset_exists_on_colab(dataset_id: int | str) -> bool:
 
 
 def _build_zip_in_memory(dataset_folder: str) -> bytes:
-    """Запакувати усі CSV з dataset folder у ZIP у пам'яті."""
+    """
+    Запакувати усі CSV з dataset folder у ZIP у пам'яті.
+
+    Зберігає ієрархію відносно `dataset_folder`, щоб підпапки виду
+    `splits_<name>/split_<role>.csv` теж потрапили на Colab. CSV в корені
+    pакуються як просто `<name>.csv` (1-рівнева ієрархія).
+    """
     folder = Path(dataset_folder)
     if not folder.exists():
         raise ColabSyncError(f"Dataset folder не існує: {folder}")
 
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
-        for csv_file in folder.glob("*.csv"):
-            # arcname без шляху — просто назва файлу
-            zf.write(csv_file, arcname=csv_file.name)
-            logger.info(f"  Added {csv_file.name} ({csv_file.stat().st_size / 1024 / 1024:.1f} MB)")
+        for csv_file in folder.rglob("*.csv"):
+            arcname = csv_file.relative_to(folder).as_posix()
+            zf.write(csv_file, arcname=arcname)
+            logger.info(f"  Added {arcname} ({csv_file.stat().st_size / 1024 / 1024:.1f} MB)")
 
     zip_bytes = buf.getvalue()
     logger.info(f"ZIP built: {len(zip_bytes) / 1024 / 1024:.1f} MB")

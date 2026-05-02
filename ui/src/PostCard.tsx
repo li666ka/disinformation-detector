@@ -9,6 +9,7 @@ import {
   Clock, Globe, Bot, Info, Rss,
 } from "lucide-react";
 import type { ClassifiedPost } from "./types";
+import { FactCheckBadge } from "./components/FactCheckBadge";
 
 interface PostCardProps {
   post: ClassifiedPost;
@@ -256,6 +257,13 @@ export default function PostCard({
             <ClassificationBadge classification={classification} onReclassify={onClassify} classifying={classifying} />
           )}
 
+          {classification && classification.label !== "UNCERTAIN" && (
+            <FactCheckBadge
+              factCheck={post.factCheck}
+              loading={post.factCheckLoading}
+            />
+          )}
+
           {/* Details button (only for social posts, not RSS) */}
           {onDetails && post.source !== "rss" && (
             <Button variant="outline" size="sm" onClick={onDetails} className="gap-1.5">
@@ -272,6 +280,129 @@ export default function PostCard({
             </Button>
           )}
         </div>
+
+        {post.factCheck && (
+          <details className="text-xs text-muted-foreground mt-2">
+            <summary className="cursor-pointer hover:text-foreground select-none">
+              Fact-check деталі ({post.factCheck.claims_total ?? 0} claim
+              {(post.factCheck.claims_total ?? 0) === 1 ? "" : "s"},{" "}
+              {post.factCheck.claims_found ?? 0} перевірено)
+            </summary>
+            <div className="mt-1.5 space-y-2 pl-2 border-l-2 border-muted">
+              <p className="text-[10px] text-muted-foreground italic">
+                Метод витягування:{" "}
+                {post.factCheck.extraction_method === "llm"
+                  ? "LLM (Gemini)"
+                  : "Простий (regex)"}
+              </p>
+
+              {post.factCheck.claims_results && post.factCheck.claims_results.length > 0 ? (
+                post.factCheck.claims_results.map((cr, idx) => {
+                  const stanceLabel =
+                    cr.stance === "supports" ? "стверджує" :
+                    cr.stance === "refutes" ? "спростовує" : "нейтрально";
+
+                  return (
+                    <div key={idx} className="space-y-0.5">
+                      <div className="font-medium">
+                        {idx + 1}. "{cr.claim}"
+                      </div>
+                      <div className="pl-3 space-y-0.5">
+                        <div className="text-[10px] text-muted-foreground">
+                          Позиція: {stanceLabel}
+                        </div>
+                        {cr.found ? (
+                          <>
+                            {cr.claim_text_matched && cr.claim_text_matched !== cr.claim && (
+                              <div className="text-muted-foreground">
+                                Знайдено:{" "}
+                                <span className="italic">"{cr.claim_text_matched}"</span>
+                              </div>
+                            )}
+                            <div>
+                              Fact-check:{" "}
+                              <span
+                                className={cn(
+                                  cr.verdict_normalized === "FAKE" && "text-red-600 dark:text-red-400",
+                                  cr.verdict_normalized === "REAL" && "text-green-600 dark:text-green-400",
+                                  cr.verdict_normalized === "MIXED" && "text-amber-600 dark:text-amber-400",
+                                )}
+                              >
+                                {cr.verdict || cr.verdict_normalized}
+                              </span>{" "}
+                              ({cr.publisher})
+                              {cr.url && (
+                                <a
+                                  href={cr.url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="text-blue-500 ml-1 hover:underline"
+                                >
+                                  →
+                                </a>
+                              )}
+                            </div>
+                            {cr.stance !== "neutral" && (
+                              <div>
+                                Висновок: автор{" "}
+                                <span
+                                  className={cn(
+                                    "font-medium",
+                                    cr.effective_author_verdict === "FAKE" && "text-red-600 dark:text-red-400",
+                                    cr.effective_author_verdict === "REAL" && "text-green-600 dark:text-green-400",
+                                    cr.effective_author_verdict === "MIXED" && "text-amber-600 dark:text-amber-400",
+                                  )}
+                                >
+                                  {cr.effective_author_verdict === "FAKE" && "spreading misinfo (FAKE)"}
+                                  {cr.effective_author_verdict === "REAL" && "factually correct (REAL)"}
+                                  {cr.effective_author_verdict === "MIXED" && "mixed/ambiguous"}
+                                  {cr.effective_author_verdict === "UNKNOWN" && "unknown"}
+                                </span>
+                              </div>
+                            )}
+                          </>
+                        ) : (
+                          <div className="text-amber-600 dark:text-amber-400">
+                            Не знайдено fact-check
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })
+              ) : (
+                <>
+                  {post.factCheck.claim_query_used && (
+                    <div>
+                      <span className="font-medium">Запит:</span>{" "}
+                      <span className="italic">"{post.factCheck.claim_query_used}"</span>
+                    </div>
+                  )}
+                  {post.factCheck.fact_check_found ? (
+                    <div>
+                      <span className="font-medium">{post.factCheck.publisher}:</span>{" "}
+                      {post.factCheck.verdict}
+                      {post.factCheck.url && (
+                        <a
+                          href={post.factCheck.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-blue-500 ml-1 hover:underline"
+                        >
+                          [link]
+                        </a>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="text-amber-600 dark:text-amber-400">
+                      Перевірок не знайдено
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          </details>
+        )}
       </CardContent>
     </Card>
   );

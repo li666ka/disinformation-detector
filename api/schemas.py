@@ -56,8 +56,22 @@ class ModelRecordResponse(BaseModel):
     filename: Optional[str] = None   # LLM presets have no file
     name: str                         # required for all records
     model_type: str
+    pipeline_type: str = "tweet"      # "tweet" | "article" | "aggregated"
     accuracy: Optional[float] = None
+    precision: Optional[float] = None
+    recall: Optional[float] = None
+    f1_score: Optional[float] = None
+    # Extra metrics — заповнюються із metrics_json через _enrich_with_metrics_json.
+    # Не зберігаються окремими SQL колонками: source of truth — metrics_json.
+    f1_macro: Optional[float] = None
+    f1_fake: Optional[float] = None
+    f1_real: Optional[float] = None
+    roc_auc: Optional[float] = None
+    metrics_json: Optional[str] = None
     is_active: bool
+    splits_used: Optional[str] = None  # "in_domain" | "cross_domain" | "mixed" | NULL
+    dataset_id: Optional[int] = None
+    dataset_name: Optional[str] = None  # резолвиться у serializer (не SQL колонка)
     llm_config: Optional[str] = None  # JSON string for LLM presets
     created_at: datetime
 
@@ -66,9 +80,9 @@ class ModelRecordResponse(BaseModel):
 
 # ── LLM Presets ─────────────────────────────────────────────────────────
 AVAILABLE_BASE_MODELS = [
-    "gemini-2.5-flash-lite",
-    "gemini-2.5-flash",
-    "gemini-2.5-pro",
+    "claude-haiku-4-5",
+    "claude-sonnet-4-6",
+    "claude-opus-4-7",
 ]
 
 AVAILABLE_MODES = ["zero_shot", "few_shot", "cot", "bagging"]
@@ -99,7 +113,7 @@ class FewShotExample(BaseModel):
 
 class LLMPresetCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=200)
-    base_model: str = Field(default="gemini-2.5-flash-lite")
+    base_model: str = Field(default="claude-haiku-4-5")
     mode: str = Field(default="zero_shot")
     system_prompt: Optional[str] = None
     temperature: float = Field(default=0.0, ge=0.0, le=2.0)
@@ -161,14 +175,22 @@ class AdditionalFeatures(BaseModel):
 
 class NBConfig(BaseModel):
     model: Literal["nb"]
-    variant: str = "multinomial"
+    variant: str = "complement"
     vectorizer: str = "tfidf"
     ngram_range: str = "1,1"
     alpha: str = "1.0"
     additional_features: Optional[AdditionalFeatures] = None
 
 
+class DistilBERTConfig(BaseModel):
+    model: Literal["distilbert"]
+    integration_mode: str = "concat"
+    additional_features: Optional[AdditionalFeatures] = None
+
+
 class DeBERTaConfig(BaseModel):
+    """Legacy alias — accepted for backward-compat with old payloads / records.
+    New code should use DistilBERTConfig (model: 'distilbert')."""
     model: Literal["deberta"]
     integration_mode: str = "concat"
     additional_features: Optional[AdditionalFeatures] = None
@@ -181,8 +203,30 @@ class LLMConfig(BaseModel):
     additional_features: Optional[AdditionalFeatures] = None
 
 
+class GINConfig(BaseModel):
+    model: Literal["gin"]
+    hidden_dim: str = "128"
+    num_layers: str = "3"
+    dropout: str = "0.5"
+    learning_rate: str = "0.001"
+    epochs: str = "50"
+    pooling: str = "mean"
+    additional_features: Optional[AdditionalFeatures] = None
+
+
+class GraphSAGEConfig(BaseModel):
+    model: Literal["sage"]
+    hidden_dim: str = "128"
+    num_layers: str = "2"
+    dropout: str = "0.5"
+    learning_rate: str = "0.001"
+    epochs: str = "50"
+    aggregator: str = "mean"
+    additional_features: Optional[AdditionalFeatures] = None
+
+
 ModelConfig = Annotated[
-    Union[NBConfig, DeBERTaConfig, LLMConfig],
+    Union[NBConfig, DistilBERTConfig, DeBERTaConfig, LLMConfig, GINConfig, GraphSAGEConfig],
     pydantic.Discriminator("model"),
 ]
 

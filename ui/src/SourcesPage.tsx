@@ -9,8 +9,7 @@ import { Checkbox } from "./components/ui/checkbox";
 import { Search, Link, Clock, Globe, Loader2, Rss } from "lucide-react";
 import { toast } from "sonner";
 import PostCard from "./PostCard";
-import VerifyModal from "./VerifyModal";
-import type { ModelRecord, NewsItem, ClassifiedPost, SourceType } from "./types";
+import type { ModelRecord, NewsItem, ClassifiedPost, SourceType, FactCheckResult } from "./types";
 import PostDetailsModal from "./PostDetailsModal";
 
 
@@ -68,12 +67,6 @@ export default function SourcesPage() {
   const [postUrl, setPostUrl] = useState<string>("");
   const [classifyingIds, setClassifyingIds] = useState<Set<string>>(new Set());
   const [batchClassifying, setBatchClassifying] = useState<boolean>(false);
-  const [verifyOpen, setVerifyOpen] = useState(false);
-  const [verifyTarget, setVerifyTarget] = useState<{
-    url?: string;
-    title?: string;
-    text?: string;
-  } | null>(null);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [detailsPostId, setDetailsPostId] = useState<string | null>(null);
 
@@ -82,22 +75,17 @@ export default function SourcesPage() {
     setDetailsOpen(true);
   };
 
-  const openVerify = (post: any) => {
-    setVerifyTarget({
-      url: post.url,
-      title: post.title || undefined,
-      text: post.title ? undefined : post.text,
-    });
-    setVerifyOpen(true);
-  };
-
   useEffect(() => {
     api.get("/models")
       .then(({ data }) => {
-        setModels(data);
-        const active = data.find((m: ModelRecord) => m.is_active);
+        // Bluesky/RSS/Mastodon — single-post inference, фільтруємо article-level
+        const tweetLevel = (data as ModelRecord[]).filter(
+          (m) => m.pipeline_type !== "article",
+        );
+        setModels(tweetLevel);
+        const active = tweetLevel.find((m) => m.is_active);
         if (active) setModelId(active.id);
-        else if (data.length > 0) setModelId(data[0].id);
+        else if (tweetLevel.length > 0) setModelId(tweetLevel[0].id);
       })
       .catch(() => toast.error("Не вдалося завантажити моделі"))
       .finally(() => setLoadingModels(false));
@@ -153,10 +141,40 @@ export default function SourcesPage() {
     if (!modelId) { toast.error("Оберіть модель для класифікації"); return; }
     setClassifyingIds((prev) => new Set(prev).add(post.id));
     try {
-      const { data } = await api.post("/analyze", { text: post.text, model_id: modelId });
+      const { data: classification } = await api.post("/analyze", { text: post.text, model_id: modelId });
+
       setPosts((prev) => prev.map((p) =>
-        p.id === post.id ? { ...p, classification: { label: data.label, confidence: data.confidence, probability: data.probability } } : p
+        p.id === post.id
+          ? {
+              ...p,
+              classification: {
+                label: classification.label,
+                confidence: classification.confidence,
+                probability: classification.probability,
+              },
+              factCheckLoading: classification.label !== "UNCERTAIN",
+              factCheck: undefined,
+            }
+          : p
       ));
+
+      if (classification.label !== "UNCERTAIN") {
+        try {
+          const { data: factCheck } = await api.post<FactCheckResult>("/fact_check", {
+            text: post.text,
+            model_label: classification.label,
+            model_confidence: classification.confidence,
+          });
+          setPosts((prev) => prev.map((p) =>
+            p.id === post.id ? { ...p, factCheck, factCheckLoading: false } : p
+          ));
+        } catch (fcErr) {
+          console.warn("Fact-check failed:", fcErr);
+          setPosts((prev) => prev.map((p) =>
+            p.id === post.id ? { ...p, factCheckLoading: false } : p
+          ));
+        }
+      }
     } catch (err: any) {
       toast.error(err.response?.data?.detail || "Помилка класифікації");
     } finally {
@@ -176,6 +194,15 @@ export default function SourcesPage() {
   const classifiedPosts = posts.filter((p) => p.classification);
   const fakeCount = classifiedPosts.filter((p) => p.classification?.label === "FAKE").length;
   const realCount = classifiedPosts.filter((p) => p.classification?.label === "REAL").length;
+
+  const factCheckedPosts = classifiedPosts.filter((p) => p.factCheck?.fact_check_found);
+  const matchCount = classifiedPosts.filter((p) => p.factCheck?.comparison_status === "MATCH").length;
+  const mismatchCount = classifiedPosts.filter((p) => p.factCheck?.comparison_status === "MISMATCH").length;
+  const factCheckMixedCount = classifiedPosts.filter((p) => p.factCheck?.comparison_status === "MIXED").length;
+  const factCheckAccuracy = (matchCount + mismatchCount) > 0
+    ? matchCount / (matchCount + mismatchCount)
+    : null;
+  const noFactCheckCount = classifiedPosts.length - factCheckedPosts.length;
 
   const MODES = [
     { id: "search" as Mode, icon: Search, title: "Пошук за словами", desc: "Знайти пости за ключовими словами" },
@@ -397,6 +424,41 @@ export default function SourcesPage() {
                 </div>
               </div>
             )}
+
+            {factCheckedPosts.length > 0 && (
+              <div className="mt-3 pt-3 border-t">
+                <div className="text-xs font-semibold text-muted-foreground mb-2 uppercase tracking-wider">
+                  Порівняння з Google Fact Check
+                </div>
+                <div className="grid grid-cols-4 gap-3">
+                  <div className="text-center p-2 rounded-lg bg-emerald-50 dark:bg-emerald-950/20">
+                    <div className="text-xl font-bold text-emerald-600 dark:text-emerald-400">{matchCount}</div>
+                    <div className="text-[11px] text-muted-foreground">Збіг</div>
+                  </div>
+                  <div className="text-center p-2 rounded-lg bg-rose-50 dark:bg-rose-950/20">
+                    <div className="text-xl font-bold text-rose-600 dark:text-rose-400">{mismatchCount}</div>
+                    <div className="text-[11px] text-muted-foreground">Розбіжність</div>
+                  </div>
+                  <div className="text-center p-2 rounded-lg bg-amber-50 dark:bg-amber-950/20">
+                    <div className="text-xl font-bold text-amber-600 dark:text-amber-400">{factCheckMixedCount}</div>
+                    <div className="text-[11px] text-muted-foreground">Mixed verdict</div>
+                  </div>
+                  <div className="text-center p-2 rounded-lg bg-indigo-50 dark:bg-indigo-950/20">
+                    <div className="text-xl font-bold text-indigo-600 dark:text-indigo-400">
+                      {factCheckAccuracy !== null
+                        ? `${(factCheckAccuracy * 100).toFixed(0)}%`
+                        : "—"}
+                    </div>
+                    <div className="text-[11px] text-muted-foreground">Real-world accuracy</div>
+                  </div>
+                </div>
+                {noFactCheckCount > 0 && (
+                  <p className="text-[11px] text-muted-foreground mt-2">
+                    Для {noFactCheckCount} {noFactCheckCount === 1 ? "посту" : "постів"} fact-check не знайдено
+                  </p>
+                )}
+              </div>
+            )}
           </CardContent>
         </Card>
       )}
@@ -409,7 +471,6 @@ export default function SourcesPage() {
           classifying={classifyingIds.has(post.id)}
           canClassify={!!modelId}
           onClassify={() => classifyPost(post)}
-          onVerify={() => openVerify(post)}
           onDetails={() => openDetails(post)}
         />
       ))}
@@ -424,17 +485,6 @@ export default function SourcesPage() {
             {mode === "url" && "Вставте URL поста і натисніть «Завантажити»"}
           </p>
         </div>
-      )}
-
-      {/* Verify modal */}
-      {verifyTarget && (
-        <VerifyModal
-          open={verifyOpen}
-          onClose={() => setVerifyOpen(false)}
-          url={verifyTarget.url}
-          title={verifyTarget.title}
-          text={verifyTarget.text}
-        />
       )}
 
       {detailsPostId && (

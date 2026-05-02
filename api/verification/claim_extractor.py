@@ -2,14 +2,17 @@
 """
 Claim Extraction — витягує перевірювані твердження з тексту.
 
-Використовує Gemini LLM, через той самий google-genai SDK що вже
-інтегрований у api/llm_predictor.py.
+Викликає Claude напряму через `claude -p` subprocess
+(api.llm_predictor._call_claude_cli) — без API token, через Max plan OAuth.
 
 Вхід:
     text: довільний текст (пост, твіт, стаття)
 
 Вихід:
     list[Claim] — 0+ claims. Для emotional reaction без фактів повертає [].
+
+Per-text processing — НЕ batch, оскільки stance detection потребує
+аналізу кожного тексту окремо.
 """
 from __future__ import annotations
 
@@ -32,7 +35,7 @@ A "claim" is a statement that asserts a fact about the world and can be verified
 - A speculation ("Maybe X")
 
 For each claim, extract:
-- text: the claim as a clear standalone sentence (rewrite for clarity if needed)
+- text: the claim as a clear standalone sentence (rewrite for clarity if needed, resolve pronouns)
 - claim_type: "statement" | "causal" | "statistical" | "quote"
   - statement: plain factual assertion ("X happened")
   - causal: cause-effect ("X causes Y")
@@ -40,13 +43,17 @@ For each claim, extract:
   - quote: attributed quote ("Person X said Y")
 - entities: 2-5 key named entities (proper nouns, products, places, people)
 - verifiable: true if fact-checkable, false if too vague
+- stance: "supports" | "refutes" | "neutral"
+  - supports: author asserts the claim is TRUE
+  - refutes: author asserts the claim is FALSE (e.g., "X does NOT cause Y")
+  - neutral: author just mentions/quotes without taking position
 
 If the text contains NO verifiable claims, return an empty list.
 
 Respond ONLY with valid JSON:
 {
   "claims": [
-    {"text": "...", "claim_type": "...", "entities": [...], "verifiable": true}
+    {"text": "...", "claim_type": "...", "entities": [...], "verifiable": true, "stance": "supports"}
   ]
 }
 """
@@ -54,7 +61,7 @@ Respond ONLY with valid JSON:
 
 async def extract_claims(text: str, max_claims: int = 3) -> list[Claim]:
     """
-    Витягнути claims з тексту через Gemini.
+    Витягнути claims з тексту через Claude.
 
     Args:
         text: вхідний текст
@@ -66,43 +73,36 @@ async def extract_claims(text: str, max_claims: int = 3) -> list[Claim]:
     if not text or len(text.strip()) < 10:
         return []
 
-    text = text.strip()[:2000]  # обрізаємо до розумного розміру для LLM
+    text = text.strip()[:2000]
 
     try:
-        from api.llm_predictor import _get_client, _call_gemini_raw, DEFAULT_BASE_MODEL
+        from api.llm_predictor import _call_claude_cli, ClaudeCLIError, DEFAULT_BASE_MODEL
     except ImportError as e:
         logger.error(f"Cannot import llm_predictor: {e}")
         return []
 
+    full_prompt = (
+        f"{CLAIM_EXTRACTION_PROMPT}\n\n"
+        f"Extract verifiable claims from this text:\n\n{text}"
+    )
+
     try:
-        client, types = _get_client()
-    except Exception as e:
-        logger.error(f"Failed to init Gemini client: {e}")
+        raw_text = _call_claude_cli(full_prompt, model=DEFAULT_BASE_MODEL)
+    except ClaudeCLIError as e:
+        logger.warning(f"Claude CLI failed for claim extraction: {e}")
         return []
-
-    user_prompt = f"Extract verifiable claims from this text:\n\n{text}"
-
-    try:
-        raw_text, model_used = _call_gemini_raw(
-            client, types,
-            base_model=DEFAULT_BASE_MODEL,
-            system_prompt=CLAIM_EXTRACTION_PROMPT,
-            user_prompt=user_prompt,
-            temperature=0.0,
-            max_output_tokens=500,
-        )
     except Exception as e:
-        logger.error(f"Gemini call failed for claim extraction: {e}")
+        logger.error(f"Unexpected error in claim extraction: {e}")
         return []
 
     if not raw_text:
-        logger.warning("Empty response from Gemini for claim extraction")
+        logger.warning("Empty response from Claude for claim extraction")
         return []
 
     parsed_claims = _parse_claims_json(raw_text, original_text=text)
 
     if not parsed_claims:
-        # Model might have put JSON in alternative format — try regex fallback
+        # Fallback regex if model returned non-JSON
         parsed_claims = _parse_claims_fallback(raw_text, original_text=text)
 
     return parsed_claims[:max_claims]
@@ -113,13 +113,11 @@ def _parse_claims_json(response_text: str, original_text: str) -> list[Claim]:
     if not response_text:
         return []
 
-    # Шукаємо JSON у відповіді
-    match = re.search(r'\{.*"claims".*\}', response_text, re.DOTALL)
-    if not match:
+    data = _extract_json_object(response_text)
+    if data is None:
         return []
 
     try:
-        data = json.loads(match.group())
         raw_claims = data.get("claims", [])
         if not isinstance(raw_claims, list):
             return []
@@ -131,47 +129,106 @@ def _parse_claims_json(response_text: str, original_text: str) -> list[Claim]:
             claim_text = rc.get("text", "").strip()
             if not claim_text or len(claim_text) < 10:
                 continue
-            claims.append(Claim(
-                text=claim_text,
-                claim_type=rc.get("claim_type", "statement"),
-                entities=list(rc.get("entities", [])) if isinstance(rc.get("entities"), list) else [],
-                verifiable=bool(rc.get("verifiable", True)),
-                original_text=original_text,
-            ))
+
+            # Build Claim — перевірити чи модель Claim підтримує stance
+            claim_kwargs = {
+                "text": claim_text,
+                "claim_type": rc.get("claim_type", "statement"),
+                "entities": list(rc.get("entities", [])) if isinstance(rc.get("entities"), list) else [],
+                "verifiable": bool(rc.get("verifiable", True)),
+                "original_text": original_text,
+            }
+
+            # Optional stance — якщо модель Claim має це поле
+            stance = rc.get("stance", "neutral")
+            if stance in ("supports", "refutes", "neutral"):
+                # Try to set it; ignore якщо Claim не має такого field
+                try:
+                    claim = Claim(**claim_kwargs, stance=stance)
+                except TypeError:
+                    # Old Claim model без stance — без нього
+                    claim = Claim(**claim_kwargs)
+            else:
+                claim = Claim(**claim_kwargs)
+
+            claims.append(claim)
         return claims
     except (json.JSONDecodeError, ValueError, TypeError) as e:
         logger.debug(f"JSON parse failed: {e}")
         return []
 
 
+def _extract_json_object(text: str) -> Optional[dict]:
+    """
+    Витягнути перший top-level {...} JSON-обʼєкт із довільного тексту
+    (працює і коли LLM обгортає відповідь у ```json fences```).
+    """
+    if not text:
+        return None
+    n = len(text)
+    i = 0
+    while i < n:
+        if text[i] != "{":
+            i += 1
+            continue
+        depth = 0
+        in_str = False
+        esc = False
+        for j in range(i, n):
+            ch = text[j]
+            if in_str:
+                if esc:
+                    esc = False
+                elif ch == "\\":
+                    esc = True
+                elif ch == '"':
+                    in_str = False
+                continue
+            if ch == '"':
+                in_str = True
+            elif ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    candidate = text[i:j + 1]
+                    try:
+                        return json.loads(candidate)
+                    except (json.JSONDecodeError, ValueError):
+                        break  # try next "{"
+        i += 1
+    return None
+
+
 def _parse_claims_fallback(response_text: str, original_text: str) -> list[Claim]:
     """
-    Fallback: якщо LLM повернув не-JSON, але текст явно містить claims у bullets
-    або нумерованих списках, спробувати витягти.
+    Fallback: якщо LLM повернув не-JSON, спробувати витягти з bullets/numbered list.
     """
     if not response_text:
         return []
 
-    # Шукаємо bullet/numbered list
     lines = response_text.split("\n")
     claims = []
     for line in lines:
         line = line.strip()
-        # Прибираємо bullet markers
         line = re.sub(r'^[\d\.\-\*•]+\s*', '', line)
         line = line.strip("\"' ")
         if len(line) < 15 or len(line) > 300:
             continue
-        # Простий heuristic: claim має містити дієслово
         if not re.search(r'\b(is|was|are|were|has|have|had|causes?|makes?|says?|claims?|shows?)\b', line, re.IGNORECASE):
             continue
-        claims.append(Claim(
-            text=line,
-            claim_type="statement",
-            entities=[],
-            verifiable=True,
-            original_text=original_text,
-        ))
+        try:
+            claim = Claim(
+                text=line,
+                claim_type="statement",
+                entities=[],
+                verifiable=True,
+                original_text=original_text,
+            )
+        except Exception as e:
+            logger.warning(f"Cannot create Claim: {e}")
+            continue
+        claims.append(claim)
         if len(claims) >= 3:
             break
 
@@ -179,11 +236,11 @@ def _parse_claims_fallback(response_text: str, original_text: str) -> list[Claim
 
 
 # ──────────────────────────────────────────────────────────────────────────
-# Synchronous helper for non-async contexts (e.g., scripts)
+# Synchronous helper for non-async contexts
 # ──────────────────────────────────────────────────────────────────────────
 
 def extract_claims_sync(text: str, max_claims: int = 3) -> list[Claim]:
-    """Synchronous wrapper для скриптів. Використовуйте extract_claims у async."""
+    """Synchronous wrapper для скриптів. Use extract_claims() in async."""
     import asyncio
     try:
         loop = asyncio.get_event_loop()

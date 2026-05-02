@@ -1,21 +1,21 @@
-import React, { useState, useEffect } from "react";
-import api from "./api";
+import React, { useEffect, useState } from "react";
 import { cn } from "./lib/utils";
+import api from "./api";
 import { Button } from "./components/ui/button";
 import { Card, CardContent } from "./components/ui/card";
 import { Badge } from "./components/ui/badge";
 import { Checkbox } from "./components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./components/ui/select";
 import { Label } from "./components/ui/label";
-import { Check, ChevronLeft, ChevronRight, Users, User as UserIcon, Sparkles } from "lucide-react";
-import type { FeatureGroupDef, ModelRecord } from "./types";
+import { Check, ChevronLeft, ChevronRight, Users, User as UserIcon } from "lucide-react";
+import type { Dataset, FeatureGroupDef } from "./types";
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
 const FEATURE_GROUPS: Record<string, FeatureGroupDef> = {
   semantic: {
     label: "Семантичні",
-    description: "TF-IDF векторизація тексту — основа класифікації",
+    description: "Векторизація тексту — основа класифікації",
     features: [{ key: "text", label: "Текст", type: "semantic" }],
   },
   emotional: {
@@ -40,74 +40,104 @@ const FEATURE_GROUPS: Record<string, FeatureGroupDef> = {
   },
   stylistic: {
     label: "Стилістичні",
-    description: "Лінгвістичний стиль та читабельність тексту",
+    description: "Форма тексту + риторичні маніпуляції (clickbait, authority refs)",
     features: [
+      // Original stylistic (4)
       { key: "caps_ratio", label: "Частка ВЕЛИКИХ ЛІТЕР", type: "stylistic" },
       { key: "ttr", label: "Лексичне різноманіття", type: "stylistic" },
       { key: "repetition_score", label: "Повторюваність фраз", type: "stylistic" },
       { key: "avg_word_length", label: "Середня довжина слова", type: "stylistic" },
-    ],
-  },
-  rhetorical: {
-    label: "Риторичні",
-    description: "Маніпулятивні риторичні прийоми та апеляції",
-    features: [
-      { key: "clickbait_score", label: "Клікбейт та маніпуляції", type: "rhetorical" },
-      { key: "authority_refs", label: "Анонімні посилання", type: "rhetorical" },
-      { key: "pronoun_ratio", label: "Займенники ми/вони", type: "rhetorical" },
-      { key: "question_count", label: "Риторичні питання", type: "rhetorical" },
+      // Merged from rhetorical (4)
+      { key: "clickbait_score", label: "Клікбейт та маніпуляції", type: "stylistic" },
+      { key: "authority_refs", label: "Анонімні посилання", type: "stylistic" },
+      { key: "pronoun_ratio", label: "Займенники ми/вони", type: "stylistic" },
+      { key: "question_count", label: "Риторичні питання", type: "stylistic" },
     ],
   },
   social: {
-    label: "Соціальні",
-    description: "Соціальні метадані: рейтинг, коментарі, домен",
+    label: "Соціальні + Graph",
+    description: "Профілі користувачів-поширювачів + структура поширення",
     features: [
-      { key: "upvote_ratio", label: "Upvote ratio", type: "social" },
-      { key: "score_normalized", label: "Нормалізований score", type: "social" },
-      { key: "num_comments_norm", label: "Кількість коментарів", type: "social" },
-      { key: "domain_credibility", label: "Надійність домену", type: "social" },
+      // Profile counts (6)
+      { key: "followers_count_norm", label: "Кількість підписників", type: "social" },
+      { key: "friends_count_norm", label: "Кількість підписок", type: "social" },
+      { key: "ff_ratio", label: "Співвідношення followers/friends", type: "social" },
+      { key: "statuses_count_norm", label: "Кількість твітів", type: "social" },
       { key: "account_age_norm", label: "Вік акаунту", type: "social" },
-      { key: "has_url", label: "Наявність URL", type: "social" },
+      { key: "statuses_per_day", label: "Постів на день (bot signal)", type: "social" },
+      // Profile flags + strings (6)
+      { key: "verified", label: "Верифікований акаунт", type: "social" },
+      { key: "has_description", label: "Наявність опису", type: "social" },
+      { key: "has_location", label: "Наявність локації", type: "social" },
+      { key: "description_length_norm", label: "Довжина опису", type: "social" },
+      { key: "screen_name_length_norm", label: "Довжина username", type: "social" },
+      { key: "screen_name_digits_ratio", label: "Частка цифр у username", type: "social" },
+      // Engagement (5)
+      { key: "like_count_norm", label: "Кількість лайків поста", type: "social" },
+      { key: "retweet_count_norm", label: "Кількість ретвітів", type: "social" },
+      { key: "reply_count_norm", label: "Кількість коментарів", type: "social" },
+      { key: "like_to_retweet_ratio", label: "Likes/Retweets ratio (Shu 2020)", type: "social" },
+      { key: "engagement_rate", label: "Engagement rate (Cha 2010)", type: "social" },
+      // Graph features (6 НОВИХ — обчислюються per-article з cascade)
+      { key: "cascade_depth_norm", label: "Глибина каскаду reply tree", type: "social", isGraph: true },
+      { key: "cascade_breadth_norm", label: "Ширина каскаду", type: "social", isGraph: true },
+      { key: "lifetime_hours_norm", label: "Тривалість поширення (год)", type: "social", isGraph: true },
+      { key: "retweets_per_tweet", label: "Ретвіти на твіт", type: "social", isGraph: true },
+      { key: "replies_per_tweet", label: "Коментарі на твіт", type: "social", isGraph: true },
+      { key: "unique_users_norm", label: "Унікальні користувачі", type: "social", isGraph: true },
     ],
   },
 };
 
+const GROUP_LABEL_OVERRIDES: Record<string, Record<string, string>> = {
+  nb: { semantic: "Лексичні" },
+};
+
+const getGroupLabel = (groupKey: string, modelType?: string): string =>
+  (modelType && GROUP_LABEL_OVERRIDES[modelType]?.[groupKey]) ||
+  FEATURE_GROUPS[groupKey]?.label ||
+  groupKey;
+
 const ALL_FEATURE_KEYS = [
   "text",
-  "sentiment_score","emotion_intensity","emoji_count","exclamation_count",
-  "anger_score","fear_score","anticipation_score","trust_score","surprise_score",
-  "sadness_score","joy_score","disgust_score","positive_score","negative_score",
-  "caps_ratio","ttr","repetition_score","avg_word_length",
-  "clickbait_score","authority_refs","pronoun_ratio","question_count",
-  "upvote_ratio","score_normalized","num_comments_norm","domain_credibility","account_age_norm","has_url",
+  // Emotional — 14 keys
+  "sentiment_score", "emotion_intensity", "emoji_count", "exclamation_count",
+  "anger_score", "fear_score", "anticipation_score", "trust_score", "surprise_score",
+  "sadness_score", "joy_score", "disgust_score", "positive_score", "negative_score",
+  // Stylistic — 8 keys (4 form + 4 rhetorical, об'єднано)
+  "caps_ratio", "ttr", "repetition_score", "avg_word_length",
+  "clickbait_score", "authority_refs", "pronoun_ratio", "question_count",
+  // Social — 23 keys (17 profile/engagement + 6 graph)
+  "followers_count_norm", "friends_count_norm", "ff_ratio",
+  "statuses_count_norm", "account_age_norm", "statuses_per_day",
+  "verified", "has_description", "has_location",
+  "description_length_norm", "screen_name_length_norm", "screen_name_digits_ratio",
+  "like_count_norm", "retweet_count_norm", "reply_count_norm",
+  "like_to_retweet_ratio", "engagement_rate",
+  // Graph cascade (6 нових)
+  "cascade_depth_norm", "cascade_breadth_norm", "lifetime_hours_norm",
+  "retweets_per_tweet", "replies_per_tweet", "unique_users_norm",
 ];
 
 const MODEL_OPTIONS = [
   { id: "nb", name: "Naive Bayes", desc: "MultinomialNB / ComplementNB + TF-IDF", group: "classical" },
-  { id: "deberta", name: "DistilBERT", desc: "Fine-tuned трансформер + додаткові ознаки", group: "neural" },
-  { id: "llm", name: "Gemini (Zero-Shot)", desc: "Zero-shot класифікація через OpenAI API", group: "llm" },
+  { id: "distilbert", name: "DistilBERT", desc: "Fine-tuning DistilBERT на повний article_text (article-level)", group: "neural" },
+  { id: "gin", name: "GIN", desc: "Graph Isomorphism Network на графі стаття→твіти→ретвіти→коментарі", group: "graph" },
+  { id: "sage", name: "GraphSAGE", desc: "Inductive GNN на графі стаття→твіти→ретвіти→коментарі", group: "graph" },
 ];
 
-const MODEL_LABELS: Record<string, string> = { nb: "Naive Bayes", deberta: "DistilBERT", llm: "Gemini (Zero-Shot)" };
+const MODEL_LABELS: Record<string, string> = {
+  nb: "Naive Bayes",
+  distilbert: "DistilBERT",
+  gin: "GIN",
+  sage: "GraphSAGE",
+};
 
 const ENSEMBLE_STRATEGIES = [
   { id: "hard", name: "Hard Voting", desc: "Більшість голосів (majority label)" },
   { id: "soft", name: "Soft Voting", desc: "Середнє ймовірностей моделей" },
   { id: "weighted", name: "Weighted Voting", desc: "Зважена сума (ваги задаються вручну)" },
 ];
-
-function parseLlmPresetConfig(llmConfigJson: string | null | undefined): string {
-  if (!llmConfigJson) return "?";
-  try {
-    const cfg = JSON.parse(llmConfigJson);
-    const modeLabels: Record<string, string> = {
-      zero_shot: "Zero-shot", few_shot: "Few-shot", cot: "CoT", bagging: "Bagging",
-    };
-    return `${cfg.base_model || "?"} · ${modeLabels[cfg.mode] || cfg.mode}`;
-  } catch {
-    return "?";
-  }
-}
 
 function buildDefaultMask(allTrue: boolean, forceGroups: string[] = []) {
   const mask: Record<string, boolean> = {};
@@ -120,7 +150,8 @@ function buildDefaultMask(allTrue: boolean, forceGroups: string[] = []) {
 
 const DEFAULT_PARAMS: any = {
   nb: {
-    variant: "multinomial", vectorizer: "tfidf", ngram: "1,1", alpha: "1.0",
+    variant: "complement", vectorizer: "tfidf", ngram: "1,1", alpha: "1.0",
+    use_text: true,
     additional_groups: ["semantic"], feature_mask: buildDefaultMask(false, ["semantic"]),
     preprocessing: {
       removeUrls: true, removeMentions: true, cleaning: true, lowercase: true,
@@ -128,8 +159,27 @@ const DEFAULT_PARAMS: any = {
       stemming: false, lemmatization: true,
     },
   },
-  deberta: { integration_mode: "concat", additional_groups: ["semantic"], feature_mask: buildDefaultMask(false, ["semantic"]) },
-  llm: { mode: "single", lang: "auto", additional_groups: ["semantic"], feature_mask: buildDefaultMask(false, ["semantic"]) },
+  distilbert: { integration_mode: "concat", additional_groups: ["semantic"], feature_mask: buildDefaultMask(false, ["semantic"]) },
+  gin: {
+    hidden_dim: "128",
+    num_layers: "3",
+    dropout: "0.5",
+    learning_rate: "0.001",
+    epochs: "50",
+    pooling: "mean",
+    additional_groups: ["semantic"],
+    feature_mask: buildDefaultMask(false, ["semantic"]),
+  },
+  sage: {
+    hidden_dim: "128",
+    num_layers: "2",
+    dropout: "0.5",
+    learning_rate: "0.001",
+    epochs: "50",
+    aggregator: "mean",
+    additional_groups: ["semantic"],
+    feature_mask: buildDefaultMask(false, ["semantic"]),
+  },
 };
 
 function getDefaultParams(type: string) {
@@ -150,16 +200,15 @@ export default function ClassificationWizard({ trainingMode = false, onConfigCha
   const [modelParams, setModelParams] = useState<any>({});
   const [ensembleStrategy, setEnsembleStrategy] = useState<string>("hard");
   const [weights, setWeights] = useState<any>({});
-
-  // LLM presets
-  const [llmPresets, setLlmPresets] = useState<ModelRecord[]>([]);
-  const [selectedPresetId, setSelectedPresetId] = useState<number | null>(null);
+  const [activeDataset, setActiveDataset] = useState<Dataset | null>(null);
 
   useEffect(() => {
-    api.get<ModelRecord[]>("/models")
-      .then((res) => setLlmPresets(res.data.filter((m) => m.model_type === "llm")))
-      .catch(() => {});
-  }, []);
+    if (!trainingMode) return;
+    api
+      .get<Dataset | null>("/datasets/active/info")
+      .then((resp) => setActiveDataset(resp.data ?? null))
+      .catch(() => setActiveDataset(null));
+  }, [trainingMode]);
 
   const STEPS: any = {
     single: ["Режим", "Модель", "Параметри", "Підсумок"],
@@ -251,15 +300,21 @@ export default function ClassificationWizard({ trainingMode = false, onConfigCha
       if (hasGroups || hasAnyFeature) { model.additional_features = { groups, mask }; }
       else { model.additional_features = null; }
       if (type === "nb") {
-        model.variant = p.variant || "multinomial";
+        model.variant = p.variant || "complement";
         model.vectorizer = p.vectorizer || "tfidf";
         model.ngram_range = p.ngram || "1,1";
         model.alpha = p.alpha || "1.0";
+        model.use_text = p.use_text ?? true;
       }
-      if (type === "deberta") { model.integration_mode = p.integration_mode || "concat"; }
-      if (type === "llm") {
-        if (selectedPresetId) { model.preset_id = selectedPresetId; }
-        model.mode = p.mode || "zero_shot";
+      if (type === "distilbert") { model.integration_mode = p.integration_mode || "concat"; }
+      if (type === "gin" || type === "sage") {
+        model.hidden_dim = p.hidden_dim || "128";
+        model.num_layers = p.num_layers || (type === "gin" ? "3" : "2");
+        model.dropout = p.dropout || "0.5";
+        model.learning_rate = p.learning_rate || "0.001";
+        model.epochs = p.epochs || "50";
+        if (type === "gin") model.pooling = p.pooling || "mean";
+        if (type === "sage") model.aggregator = p.aggregator || "mean";
       }
       return model;
     });
@@ -284,7 +339,7 @@ export default function ClassificationWizard({ trainingMode = false, onConfigCha
     const config = buildRequest();
     onConfigChange(config);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [trainingMode, mode, selectedModel, selectedModels, modelParams, ensembleStrategy, weights, selectedPresetId]);
+  }, [trainingMode, mode, selectedModel, selectedModels, modelParams, ensembleStrategy, weights]);
 
   // ── Step renderers ─────────────────────────────────────────────────────
 
@@ -386,11 +441,11 @@ export default function ClassificationWizard({ trainingMode = false, onConfigCha
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label className="text-xs">Варіант</Label>
-                <Select value={p.variant || "multinomial"} onValueChange={(v) => upd("variant", v)}>
+                <Select value={p.variant || "complement"} onValueChange={(v) => upd("variant", v)}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="multinomial">MultinomialNB</SelectItem>
                     <SelectItem value="complement">ComplementNB</SelectItem>
+                    <SelectItem value="multinomial">MultinomialNB</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -420,7 +475,7 @@ export default function ClassificationWizard({ trainingMode = false, onConfigCha
                 <Select value={p.alpha || "1.0"} onValueChange={(v) => upd("alpha", v)}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    {["0.01","0.1","0.5","1.0","2.0"].map((v) => (
+                    {["0.01", "0.1", "0.5", "1.0", "2.0"].map((v) => (
                       <SelectItem key={v} value={v}>{v}</SelectItem>
                     ))}
                   </SelectContent>
@@ -428,16 +483,37 @@ export default function ClassificationWizard({ trainingMode = false, onConfigCha
               </div>
             </div>
 
+            {/* Use TF-IDF tokens (для ablation) */}
+            <div className="space-y-1">
+              <div className="flex items-center gap-2">
+                <Checkbox
+                  id={`nb-use-text-${type}`}
+                  checked={p.use_text ?? true}
+                  onCheckedChange={(checked) => upd("use_text", checked === true)}
+                />
+                <label
+                  htmlFor={`nb-use-text-${type}`}
+                  className="text-sm cursor-pointer"
+                >
+                  Використовувати TF-IDF tokens (тексти статей)
+                </label>
+              </div>
+              <p className="text-xs text-muted-foreground pl-6">
+                💡 Вимкніть для ablation: тренування тільки на feature
+                engineering без bag-of-words.
+              </p>
+            </div>
+
             {/* Preprocessing */}
             <div className="space-y-3">
               <div className="flex items-center gap-2">
                 <Checkbox
-                  checked={["removeUrls","removeMentions","cleaning","lowercase","removeStopwords","removePunctuation","removeNumbers"].every(k => pp[k])}
+                  checked={["removeUrls", "removeMentions", "cleaning", "lowercase", "removeStopwords", "removePunctuation", "removeNumbers"].every(k => pp[k])}
                   onCheckedChange={(checked) => {
                     setModelParams((prev: any) => {
                       const oldPp = prev[type]?.preprocessing || {};
                       const updated: any = { ...oldPp };
-                      ["removeUrls","removeMentions","cleaning","lowercase","removeStopwords","removePunctuation","removeNumbers"].forEach(k => { updated[k] = !!checked; });
+                      ["removeUrls", "removeMentions", "cleaning", "lowercase", "removeStopwords", "removePunctuation", "removeNumbers"].forEach(k => { updated[k] = !!checked; });
                       return { ...prev, [type]: { ...prev[type], preprocessing: updated } };
                     });
                   }}
@@ -505,58 +581,109 @@ export default function ClassificationWizard({ trainingMode = false, onConfigCha
           </div>
         );
       }
-      case "deberta":
+      case "distilbert":
         return (
           <div className="space-y-4">
-            <p className="text-sm text-muted-foreground">Fine-tuned DistilBERT — класифікація тексту через трансформер (concat mode)</p>
+            <p className="text-sm text-muted-foreground">Fine-tuning DistilBERT на article_title + article_text (article-level)</p>
             <AdditionalFeaturesSection type={type} groups={groups} mask={p.feature_mask} toggleGroup={toggleGroup} toggleFeature={toggleFeature} />
           </div>
         );
-      case "llm":
+      case "gin":
+      case "sage": {
+        const isGin = type === "gin";
         return (
           <div className="space-y-4">
-            <div>
-              <Label className="text-xs">LLM пресет</Label>
-              <Select
-                value={selectedPresetId?.toString() || ""}
-                onValueChange={(v) => setSelectedPresetId(parseInt(v))}
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="Оберіть пресет..." />
-                </SelectTrigger>
-                <SelectContent>
-                  {llmPresets.length === 0 ? (
-                    <div className="p-3 text-sm text-muted-foreground text-center">
-                      Пресетів ще немає. Створіть у розділі "LLM пресети".
-                    </div>
-                  ) : (
-                    llmPresets.map((pr) => {
-                      const cfg = parseLlmPresetConfig(pr.llm_config);
-                      return (
-                        <SelectItem key={pr.id} value={pr.id.toString()}>
-                          <span className="flex items-center gap-2">
-                            <Sparkles className="h-3 w-3" />
-                            {pr.name} &middot; {cfg}
-                          </span>
-                        </SelectItem>
-                      );
-                    })
-                  )}
-                </SelectContent>
-              </Select>
-            </div>
-            {selectedPresetId && (() => {
-              const preset = llmPresets.find((pr) => pr.id === selectedPresetId);
-              if (!preset) return null;
-              const cfg = parseLlmPresetConfig(preset.llm_config);
-              return (
-                <div className="text-xs text-muted-foreground p-2 rounded bg-muted/50">
-                  <span className="font-medium">{preset.name}</span> &middot; {cfg}
+            <p className="text-sm text-muted-foreground">
+              {isGin
+                ? "Graph Isomorphism Network — навчання на графі новина→твіти→retweet/reply з MiniLM ембеддингами вузлів"
+                : "GraphSAGE — inductive GNN з sampling-агрегацією сусідів у графі поширення новини"}
+            </p>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label className="text-xs">Hidden dim</Label>
+                <Select value={p.hidden_dim || "128"} onValueChange={(v) => upd("hidden_dim", v)}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {["64", "128", "256", "512"].map((v) => (
+                      <SelectItem key={v} value={v}>{v}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label className="text-xs">Кількість шарів</Label>
+                <Select value={p.num_layers || (isGin ? "3" : "2")} onValueChange={(v) => upd("num_layers", v)}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {["2", "3", "4", "5"].map((v) => (
+                      <SelectItem key={v} value={v}>{v}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label className="text-xs">Dropout</Label>
+                <Select value={p.dropout || "0.5"} onValueChange={(v) => upd("dropout", v)}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {["0.0", "0.2", "0.3", "0.5", "0.7"].map((v) => (
+                      <SelectItem key={v} value={v}>{v}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label className="text-xs">Learning rate</Label>
+                <Select value={p.learning_rate || "0.001"} onValueChange={(v) => upd("learning_rate", v)}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {["0.0001", "0.0005", "0.001", "0.005", "0.01"].map((v) => (
+                      <SelectItem key={v} value={v}>{v}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label className="text-xs">Epochs</Label>
+                <Select value={p.epochs || "50"} onValueChange={(v) => upd("epochs", v)}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {["20", "50", "100", "200"].map((v) => (
+                      <SelectItem key={v} value={v}>{v}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              {isGin ? (
+                <div className="space-y-2">
+                  <Label className="text-xs">Pooling</Label>
+                  <Select value={p.pooling || "mean"} onValueChange={(v) => upd("pooling", v)}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="mean">Mean</SelectItem>
+                      <SelectItem value="sum">Sum</SelectItem>
+                      <SelectItem value="max">Max</SelectItem>
+                    </SelectContent>
+                  </Select>
                 </div>
-              );
-            })()}
+              ) : (
+                <div className="space-y-2">
+                  <Label className="text-xs">Aggregator</Label>
+                  <Select value={p.aggregator || "mean"} onValueChange={(v) => upd("aggregator", v)}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="mean">Mean</SelectItem>
+                      <SelectItem value="max">Max</SelectItem>
+                      <SelectItem value="lstm">LSTM</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+            </div>
+            <AdditionalFeaturesSection type={type} groups={groups} mask={p.feature_mask} toggleGroup={toggleGroup} toggleFeature={toggleFeature} />
           </div>
         );
+      }
       default: return null;
     }
   };
@@ -641,6 +768,27 @@ export default function ClassificationWizard({ trainingMode = false, onConfigCha
       <Card>
         <CardContent className="p-4 space-y-3 text-sm">
           <p className="font-semibold">Підсумок конфігурації</p>
+
+          {activeDataset && (
+            <div className="rounded-lg bg-muted/50 p-3 text-sm space-y-1">
+              <p className="font-medium">Дані для тренування:</p>
+              <p className="text-muted-foreground">
+                Датасет: {activeDataset.name}
+              </p>
+              <p className="text-muted-foreground">
+                Split:{" "}
+                {activeDataset.active_split
+                  ? `${activeDataset.active_split} (фіксований)`
+                  : "auto-split 70/15/15 (генерується автоматично)"}
+              </p>
+              {activeDataset.active_split && (
+                <p className="text-xs text-muted-foreground">
+                  💡 Щоб змінити split — поверніться на DatasetsPage
+                </p>
+              )}
+            </div>
+          )}
+
           <p><span className="font-medium">Режим:</span> {mode === "single" ? "Одна модель" : "Ансамбль"}</p>
           {mode === "ensemble" && <p><span className="font-medium">Стратегія:</span> {strategyObj?.name}</p>}
           {mode === "ensemble" && ensembleStrategy === "weighted" && (
@@ -660,30 +808,39 @@ export default function ClassificationWizard({ trainingMode = false, onConfigCha
                 {mid === "nb" && (() => {
                   const pp = p.preprocessing || {};
                   const ppLabels: any = {
-                    removeUrls:"URL", removeMentions:"@згадки", cleaning:"пробіли", lowercase:"lowercase",
-                    removeStopwords:"стоп-слова", stemming:"стемінг", lemmatization:"лематизація",
-                    removePunctuation:"пунктуація", removeNumbers:"числа",
+                    removeUrls: "URL", removeMentions: "@згадки", cleaning: "пробіли", lowercase: "lowercase",
+                    removeStopwords: "стоп-слова", stemming: "стемінг", lemmatization: "лематизація",
+                    removePunctuation: "пунктуація", removeNumbers: "числа",
                   };
-                  const activePreprocessing = Object.entries(pp).filter(([,v]) => v).map(([k]) => ppLabels[k] || k);
+                  const activePreprocessing = Object.entries(pp).filter(([, v]) => v).map(([k]) => ppLabels[k] || k);
                   return (
                     <>
-                      <p><span className="font-medium">Варіант:</span> {(p.variant || "multinomial").charAt(0).toUpperCase() + (p.variant || "multinomial").slice(1)}NB</p>
-                      <p><span className="font-medium">Векторизація:</span> {p.vectorizer === "count" ? "CountVectorizer" : "TF-IDF"}</p>
-                      <p><span className="font-medium">Н-грами:</span> ({p.ngram || "1,1"})</p>
+                      <p><span className="font-medium">Варіант:</span> {(p.variant || "complement").charAt(0).toUpperCase() + (p.variant || "complement").slice(1)}NB</p>
+                      {(p.use_text ?? true) ? (
+                        <>
+                          <p><span className="font-medium">Векторизація:</span> {p.vectorizer === "count" ? "CountVectorizer" : "TF-IDF"}</p>
+                          <p><span className="font-medium">Н-грами:</span> ({p.ngram || "1,1"})</p>
+                        </>
+                      ) : (
+                        <p><span className="font-medium">Режим:</span> features-only (без TF-IDF, ablation)</p>
+                      )}
                       <p><span className="font-medium">Обробка:</span> {activePreprocessing.length > 0 ? activePreprocessing.join(", ") : "немає"}</p>
                     </>
                   );
                 })()}
-                {mid === "deberta" && <p><span className="font-medium">Інтеграція:</span> {({ concat: "Concat", multiview: "Multi-view" } as any)[p.integration_mode || "concat"]}</p>}
-                {mid === "llm" && (() => {
-                  const preset = selectedPresetId ? llmPresets.find((pr) => pr.id === selectedPresetId) : null;
-                  return preset ? (
-                    <p><span className="font-medium">Пресет:</span> {preset.name} ({parseLlmPresetConfig(preset.llm_config)})</p>
-                  ) : (
-                    <p><span className="font-medium">Пресет:</span> не обрано</p>
-                  );
-                })()}
-                <p><span className="font-medium">Ознаки:</span> {groups.length > 0 ? groups.map((g: string) => FEATURE_GROUPS[g]?.label).join(", ") : "вимкнено"}{activeCount > 0 ? ` (${activeCount} додаткових)` : ""}</p>
+                {mid === "distilbert" && <p><span className="font-medium">Інтеграція:</span> {({ concat: "Concat", multiview: "Multi-view" } as any)[p.integration_mode || "concat"]}</p>}
+                {(mid === "gin" || mid === "sage") && (
+                  <>
+                    <p><span className="font-medium">Hidden dim:</span> {p.hidden_dim || "128"}</p>
+                    <p><span className="font-medium">Шарів:</span> {p.num_layers || (mid === "gin" ? "3" : "2")}</p>
+                    <p><span className="font-medium">Dropout:</span> {p.dropout || "0.5"}</p>
+                    <p><span className="font-medium">LR:</span> {p.learning_rate || "0.001"}</p>
+                    <p><span className="font-medium">Epochs:</span> {p.epochs || "50"}</p>
+                    {mid === "gin" && <p><span className="font-medium">Pooling:</span> {p.pooling || "mean"}</p>}
+                    {mid === "sage" && <p><span className="font-medium">Aggregator:</span> {p.aggregator || "mean"}</p>}
+                  </>
+                )}
+                <p><span className="font-medium">Ознаки:</span> {groups.length > 0 ? groups.map((g: string) => getGroupLabel(g, mid)).join(", ") : "вимкнено"}{activeCount > 0 ? ` (${activeCount} додаткових)` : ""}</p>
               </div>
             );
           })}
@@ -794,7 +951,7 @@ function AdditionalFeaturesSection({ type, groups, mask, toggleGroup, toggleFeat
             >
               <Checkbox checked={isActive} onCheckedChange={() => toggleGroup(type, groupKey)} />
               <div className="flex-1">
-                <span className="font-medium text-sm">{groupDef.label}</span>
+                <span className="font-medium text-sm">{getGroupLabel(groupKey, type)}</span>
                 <span className="text-xs text-muted-foreground ml-2">{groupDef.description}</span>
               </div>
               {isActive && hasSubFeatures && (
@@ -809,7 +966,12 @@ function AdditionalFeaturesSection({ type, groups, mask, toggleGroup, toggleFeat
                       checked={featureMask[f.key] || false}
                       onCheckedChange={() => toggleFeature(type, f.key)}
                     />
-                    {f.label}
+                    <span>{f.label}</span>
+                    {f.isGraph && (
+                      <Badge variant="secondary" className="ml-1 text-[9px] px-1 py-0 h-4">
+                        graph
+                      </Badge>
+                    )}
                   </label>
                 ))}
               </div>

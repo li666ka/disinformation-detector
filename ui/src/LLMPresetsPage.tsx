@@ -18,13 +18,14 @@ import {
 } from "./components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./components/ui/tabs";
 import {
-  Sparkles, Plus, Trash2, Loader2, CheckCircle2, X, Download, AlertTriangle,
+  Sparkles, Plus, Trash2, Loader2, X, Download, Target,
 } from "lucide-react";
 import { toast } from "sonner";
 import type {
   ModelRecord, LLMMode, FewShotExample,
   LLMPresetDefaults, LLMPresetTestResponse,
 } from "./types";
+import EvaluationResultsModal from "./EvaluationResultsModal";
 
 const MODE_LABELS: Record<LLMMode, string> = {
   zero_shot: "Zero-shot",
@@ -50,7 +51,7 @@ export default function LLMPresetsPage() {
   // Create modal state
   const [createOpen, setCreateOpen] = useState(false);
   const [name, setName] = useState("");
-  const [baseModel, setBaseModel] = useState("gemini-2.5-flash-lite");
+  const [baseModel, setBaseModel] = useState("claude-haiku-4-5");
   const [mode, setMode] = useState<LLMMode>("zero_shot");
   const [systemPrompt, setSystemPrompt] = useState("");
   const [temperature, setTemperature] = useState(0.0);
@@ -73,6 +74,10 @@ export default function LLMPresetsPage() {
   const [nFake, setNFake] = useState(2);
   const [nReal, setNReal] = useState(2);
   const [loadingRandom, setLoadingRandom] = useState(false);
+
+  // Evaluation
+  const [evaluatingId, setEvaluatingId] = useState<number | null>(null);
+  const [evalResult, setEvalResult] = useState<any>(null);
 
   const fetchPresets = useCallback(async () => {
     try {
@@ -103,7 +108,7 @@ export default function LLMPresetsPage() {
     if (defs) {
       setSystemPrompt(defs.default_system_prompt);
       setCotInstruction(defs.default_cot_instruction);
-      setBaseModel(defs.base_models[0] || "gemini-2.5-flash-lite");
+      setBaseModel(defs.base_models[0] || "claude-haiku-4-5");
       setTemperature(defs.default_temperature);
       setMaxTokens(defs.default_max_output_tokens);
       setBaggingNCalls(defs.default_bagging_n_calls);
@@ -149,6 +154,25 @@ export default function LLMPresetsPage() {
       toast.error(err.response?.data?.detail || "Помилка збереження пресету");
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleEvaluate = async (presetId: number) => {
+    setEvaluatingId(presetId);
+    try {
+      const { data } = await api.post(`/models/${presetId}/evaluate`, {
+        max_samples: 100,
+        test_size: 0.2,
+      });
+      setEvalResult(data);
+      await fetchPresets();
+      toast.success(
+        `Evaluation готова: accuracy ${(data.metrics.accuracy * 100).toFixed(1)}%`
+      );
+    } catch (err: any) {
+      toast.error(err.response?.data?.detail || "Помилка оцінювання");
+    } finally {
+      setEvaluatingId(null);
     }
   };
 
@@ -310,14 +334,30 @@ export default function LLMPresetsPage() {
                       {formatDate(p.created_at)}
                     </TableCell>
                     <TableCell>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-8 w-8 text-destructive hover:text-destructive"
-                        onClick={() => handleDelete(p.id)}
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
+                      <div className="flex items-center gap-1">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8"
+                          title="Оцінити на test set"
+                          disabled={evaluatingId === p.id}
+                          onClick={() => handleEvaluate(p.id)}
+                        >
+                          {evaluatingId === p.id ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                          ) : (
+                            <Target className="h-4 w-4" />
+                          )}
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8 text-destructive hover:text-destructive"
+                          onClick={() => handleDelete(p.id)}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </div>
                     </TableCell>
                   </TableRow>
                 );
@@ -350,7 +390,7 @@ export default function LLMPresetsPage() {
                 <Select value={baseModel} onValueChange={setBaseModel}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    {(defaults?.base_models || ["gemini-2.5-flash-lite", "gemini-2.5-flash", "gemini-2.5-pro"]).map((m) => (
+                    {(defaults?.base_models || ["claude-haiku-4-5", "claude-sonnet-4-6", "claude-opus-4-7"]).map((m) => (
                       <SelectItem key={m} value={m}>{m}</SelectItem>
                     ))}
                   </SelectContent>
@@ -583,6 +623,12 @@ export default function LLMPresetsPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <EvaluationResultsModal
+        open={!!evalResult}
+        onClose={() => setEvalResult(null)}
+        result={evalResult}
+      />
     </div>
   );
 }

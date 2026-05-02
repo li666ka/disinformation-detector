@@ -226,6 +226,24 @@ export default function ClassificationWizard({ trainingMode = false, onConfigCha
       const p = prev[type] || getDefaultParams(type);
       const groups = [...(p.additional_groups || [])];
       const mask = { ...(p.feature_mask || buildDefaultMask(true)) };
+
+      // NB special-case: "Лексичні" (semantic) ↔ use_text
+      if (type === "nb" && groupName === "semantic") {
+        const newUseText = !(p.use_text ?? true);
+        const idx = groups.indexOf("semantic");
+        if (newUseText) {
+          if (idx < 0) groups.push("semantic");
+          mask.text = true;
+        } else {
+          if (idx >= 0) groups.splice(idx, 1);
+          mask.text = false;
+        }
+        return {
+          ...prev,
+          [type]: { ...p, use_text: newUseText, additional_groups: groups, feature_mask: mask },
+        };
+      }
+
       const idx = groups.indexOf(groupName);
       if (idx >= 0) {
         groups.splice(idx, 1);
@@ -435,7 +453,6 @@ export default function ClassificationWizard({ trainingMode = false, onConfigCha
 
     switch (type) {
       case "nb": {
-        const pp = p.preprocessing || {};
         return (
           <div className="space-y-4">
             <div className="grid grid-cols-2 gap-4">
@@ -446,27 +463,6 @@ export default function ClassificationWizard({ trainingMode = false, onConfigCha
                   <SelectContent>
                     <SelectItem value="complement">ComplementNB</SelectItem>
                     <SelectItem value="multinomial">MultinomialNB</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label className="text-xs">Векторизація</Label>
-                <Select value={p.vectorizer || "tfidf"} onValueChange={(v) => upd("vectorizer", v)}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="tfidf">TF-IDF</SelectItem>
-                    <SelectItem value="count">CountVectorizer</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label className="text-xs">Н-грами</Label>
-                <Select value={p.ngram || "1,1"} onValueChange={(v) => upd("ngram", v)}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="1,1">(1,1)</SelectItem>
-                    <SelectItem value="1,2">(1,2)</SelectItem>
-                    <SelectItem value="1,3">(1,3)</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -483,101 +479,7 @@ export default function ClassificationWizard({ trainingMode = false, onConfigCha
               </div>
             </div>
 
-            {/* Use TF-IDF tokens (для ablation) */}
-            <div className="space-y-1">
-              <div className="flex items-center gap-2">
-                <Checkbox
-                  id={`nb-use-text-${type}`}
-                  checked={p.use_text ?? true}
-                  onCheckedChange={(checked) => upd("use_text", checked === true)}
-                />
-                <label
-                  htmlFor={`nb-use-text-${type}`}
-                  className="text-sm cursor-pointer"
-                >
-                  Використовувати TF-IDF tokens (тексти статей)
-                </label>
-              </div>
-              <p className="text-xs text-muted-foreground pl-6">
-                💡 Вимкніть для ablation: тренування тільки на feature
-                engineering без bag-of-words.
-              </p>
-            </div>
-
-            {/* Preprocessing */}
-            <div className="space-y-3">
-              <div className="flex items-center gap-2">
-                <Checkbox
-                  checked={["removeUrls", "removeMentions", "cleaning", "lowercase", "removeStopwords", "removePunctuation", "removeNumbers"].every(k => pp[k])}
-                  onCheckedChange={(checked) => {
-                    setModelParams((prev: any) => {
-                      const oldPp = prev[type]?.preprocessing || {};
-                      const updated: any = { ...oldPp };
-                      ["removeUrls", "removeMentions", "cleaning", "lowercase", "removeStopwords", "removePunctuation", "removeNumbers"].forEach(k => { updated[k] = !!checked; });
-                      return { ...prev, [type]: { ...prev[type], preprocessing: updated } };
-                    });
-                  }}
-                />
-                <Label className="text-sm font-medium">Попередня обробка тексту</Label>
-              </div>
-              <div className="grid grid-cols-2 gap-2 pl-6">
-                {[
-                  { key: "removeUrls", label: "Видалення URL-посилань" },
-                  { key: "removeMentions", label: "Видалення @згадок" },
-                  { key: "cleaning", label: "Очищення пробілів" },
-                  { key: "lowercase", label: "Нижній регістр" },
-                  { key: "removeStopwords", label: "Видалення стоп-слів" },
-                  { key: "removePunctuation", label: "Видалення пунктуації" },
-                  { key: "removeNumbers", label: "Видалення чисел" },
-                ].map((opt) => (
-                  <label key={opt.key} className="flex items-center gap-2 text-xs cursor-pointer">
-                    <Checkbox
-                      checked={pp[opt.key] || false}
-                      onCheckedChange={() => togglePreprocessing(type, opt.key)}
-                    />
-                    {opt.label}
-                  </label>
-                ))}
-              </div>
-              <div className="pl-6 space-y-2">
-                <span className="text-xs font-medium text-muted-foreground">Нормалізація слів:</span>
-                <div className="flex gap-4">
-                  {[
-                    { value: "none", label: "Немає" },
-                    { value: "stemming", label: "Стемінг" },
-                    { value: "lemmatization", label: "Лематизація" },
-                  ].map((opt) => {
-                    const current = pp.stemming ? "stemming" : pp.lemmatization ? "lemmatization" : "none";
-                    return (
-                      <label key={opt.value} className="flex items-center gap-2 text-xs cursor-pointer">
-                        <input
-                          type="radio"
-                          name={`normalization-${type}`}
-                          checked={current === opt.value}
-                          onChange={() => {
-                            setModelParams((prev: any) => ({
-                              ...prev,
-                              [type]: {
-                                ...prev[type],
-                                preprocessing: {
-                                  ...prev[type]?.preprocessing,
-                                  stemming: opt.value === "stemming",
-                                  lemmatization: opt.value === "lemmatization",
-                                },
-                              },
-                            }));
-                          }}
-                          className="accent-primary"
-                        />
-                        {opt.label}
-                      </label>
-                    );
-                  })}
-                </div>
-              </div>
-            </div>
-
-            <AdditionalFeaturesSection type={type} groups={groups} mask={p.feature_mask} toggleGroup={toggleGroup} toggleFeature={toggleFeature} />
+            <AdditionalFeaturesSection type={type} groups={groups} mask={p.feature_mask} params={p} toggleGroup={toggleGroup} toggleFeature={toggleFeature} setParam={setParam} togglePreprocessing={togglePreprocessing} setModelParams={setModelParams} />
           </div>
         );
       }
@@ -585,7 +487,7 @@ export default function ClassificationWizard({ trainingMode = false, onConfigCha
         return (
           <div className="space-y-4">
             <p className="text-sm text-muted-foreground">Fine-tuning DistilBERT на article_title + article_text (article-level)</p>
-            <AdditionalFeaturesSection type={type} groups={groups} mask={p.feature_mask} toggleGroup={toggleGroup} toggleFeature={toggleFeature} />
+            <AdditionalFeaturesSection type={type} groups={groups} mask={p.feature_mask} params={p} toggleGroup={toggleGroup} toggleFeature={toggleFeature} setParam={setParam} togglePreprocessing={togglePreprocessing} setModelParams={setModelParams} />
           </div>
         );
       case "gin":
@@ -680,7 +582,7 @@ export default function ClassificationWizard({ trainingMode = false, onConfigCha
                 </div>
               )}
             </div>
-            <AdditionalFeaturesSection type={type} groups={groups} mask={p.feature_mask} toggleGroup={toggleGroup} toggleFeature={toggleFeature} />
+            <AdditionalFeaturesSection type={type} groups={groups} mask={p.feature_mask} params={p} toggleGroup={toggleGroup} toggleFeature={toggleFeature} setParam={setParam} togglePreprocessing={togglePreprocessing} setModelParams={setModelParams} />
           </div>
         );
       }
@@ -928,15 +830,25 @@ export default function ClassificationWizard({ trainingMode = false, onConfigCha
 
 // ── Additional Features Section ──────────────────────────────────────────────
 
-function AdditionalFeaturesSection({ type, groups, mask, toggleGroup, toggleFeature }: any) {
+function AdditionalFeaturesSection({
+  type, groups, mask, params, toggleGroup, toggleFeature,
+  setParam, togglePreprocessing, setModelParams,
+}: any) {
   const featureMask = mask || {};
+  const p = params || {};
   return (
     <div className="space-y-3">
       <p className="font-medium text-sm">Ознаки:</p>
       <p className="text-xs text-muted-foreground">Оберіть групи ознак для класифікації:</p>
       {Object.entries(FEATURE_GROUPS).map(([groupKey, groupDef]: any) => {
-        const isActive = groups.includes(groupKey);
-        const hasSubFeatures = groupDef.features.length > 0;
+        // NB+semantic = "Лексичні" → стан керується p.use_text
+        const isLexicalNB = type === "nb" && groupKey === "semantic";
+        const isActive = isLexicalNB
+          ? (p.use_text ?? true)
+          : groups.includes(groupKey);
+        // Для NB+semantic інкапсульовані параметри (vec/ngram/preproc) —
+        // не показуємо лічильник підпунктів, бо їх більше немає.
+        const hasSubFeatures = !isLexicalNB && groupDef.features.length > 0;
         const activeInGroup = isActive && hasSubFeatures
           ? groupDef.features.filter((f: any) => featureMask[f.key]).length
           : 0;
@@ -958,7 +870,17 @@ function AdditionalFeaturesSection({ type, groups, mask, toggleGroup, toggleFeat
                 <Badge variant="secondary" className="text-[10px]">{activeInGroup}/{groupDef.features.length}</Badge>
               )}
             </div>
-            {isActive && hasSubFeatures && (
+            {/* NB+semantic active → render vectorizer + ngram + preprocessing inline */}
+            {isLexicalNB && isActive && (
+              <NBLexicalParams
+                params={p}
+                setParam={(k: string, v: any) => setParam(type, k, v)}
+                togglePreprocessing={(k: string) => togglePreprocessing(type, k)}
+                setModelParams={setModelParams}
+                type={type}
+              />
+            )}
+            {!isLexicalNB && isActive && hasSubFeatures && (
               <div className="pl-9 py-2 space-y-1">
                 {groupDef.features.map((f: any) => (
                   <label key={f.key} className="flex items-center gap-2 text-xs cursor-pointer py-0.5">
@@ -979,6 +901,109 @@ function AdditionalFeaturesSection({ type, groups, mask, toggleGroup, toggleFeat
           </div>
         );
       })}
+    </div>
+  );
+}
+
+// ── NB Lexical params block (rendered inside "Лексичні" group) ─────────────
+function NBLexicalParams({ params, setParam, togglePreprocessing, setModelParams, type }: any) {
+  const p = params || {};
+  const pp = p.preprocessing || {};
+  const PP_KEYS = ["removeUrls", "removeMentions", "cleaning", "lowercase", "removeStopwords", "removePunctuation", "removeNumbers"];
+  return (
+    <div className="ml-9 mt-3 space-y-4 border-l-2 border-primary/30 pl-4">
+      <div className="grid grid-cols-2 gap-4">
+        <div className="space-y-2">
+          <Label className="text-xs">Векторизація</Label>
+          <Select value={p.vectorizer || "tfidf"} onValueChange={(v) => setParam("vectorizer", v)}>
+            <SelectTrigger><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="tfidf">TF-IDF</SelectItem>
+              <SelectItem value="count">CountVectorizer</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="space-y-2">
+          <Label className="text-xs">Н-грами</Label>
+          <Select value={p.ngram || "1,1"} onValueChange={(v) => setParam("ngram", v)}>
+            <SelectTrigger><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="1,1">(1,1)</SelectItem>
+              <SelectItem value="1,2">(1,2)</SelectItem>
+              <SelectItem value="1,3">(1,3)</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+      </div>
+
+      <div className="space-y-3">
+        <div className="flex items-center gap-2">
+          <Checkbox
+            checked={PP_KEYS.every((k) => pp[k])}
+            onCheckedChange={(checked) => {
+              setModelParams((prev: any) => {
+                const oldPp = prev[type]?.preprocessing || {};
+                const updated: any = { ...oldPp };
+                PP_KEYS.forEach((k) => { updated[k] = !!checked; });
+                return { ...prev, [type]: { ...prev[type], preprocessing: updated } };
+              });
+            }}
+          />
+          <Label className="text-sm font-medium">Попередня обробка тексту</Label>
+        </div>
+        <div className="grid grid-cols-2 gap-2 pl-6">
+          {[
+            { key: "removeUrls", label: "Видалення URL-посилань" },
+            { key: "removeMentions", label: "Видалення @згадок" },
+            { key: "cleaning", label: "Очищення пробілів" },
+            { key: "lowercase", label: "Нижній регістр" },
+            { key: "removeStopwords", label: "Видалення стоп-слів" },
+            { key: "removePunctuation", label: "Видалення пунктуації" },
+            { key: "removeNumbers", label: "Видалення чисел" },
+          ].map((opt) => (
+            <label key={opt.key} className="flex items-center gap-2 text-xs cursor-pointer">
+              <Checkbox checked={pp[opt.key] || false} onCheckedChange={() => togglePreprocessing(opt.key)} />
+              {opt.label}
+            </label>
+          ))}
+        </div>
+        <div className="pl-6 space-y-2">
+          <span className="text-xs font-medium text-muted-foreground">Нормалізація слів:</span>
+          <div className="flex gap-4">
+            {[
+              { value: "none", label: "Немає" },
+              { value: "stemming", label: "Стемінг" },
+              { value: "lemmatization", label: "Лематизація" },
+            ].map((opt) => {
+              const current = pp.stemming ? "stemming" : pp.lemmatization ? "lemmatization" : "none";
+              return (
+                <label key={opt.value} className="flex items-center gap-2 text-xs cursor-pointer">
+                  <input
+                    type="radio"
+                    name={`normalization-${type}`}
+                    checked={current === opt.value}
+                    onChange={() => {
+                      setModelParams((prev: any) => ({
+                        ...prev,
+                        [type]: {
+                          ...prev[type],
+                          preprocessing: {
+                            ...prev[type]?.preprocessing,
+                            stemming: opt.value === "stemming",
+                            lemmatization: opt.value === "lemmatization",
+                          },
+                        },
+                      }));
+                    }}
+                    className="accent-primary"
+                  />
+                  {opt.label}
+                </label>
+              );
+            })}
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

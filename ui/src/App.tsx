@@ -318,13 +318,17 @@ function App() {
         const cfg: any = wizardConfig?.models?.[0] || {};
         const useText = cfg.use_text ?? true;
         const mask = cfg.additional_features?.mask || {};
-        const hasFeatures = Object.values(mask).some((v) => v === true);
+        // "text" — це маркер lexical-групи, не справжня feature. Виключаємо
+        // його з hasFeatures, щоб ablation-валідація працювала коректно.
+        const hasFeatures = Object.entries(mask).some(
+          ([k, v]) => k !== "text" && v === true
+        );
         if (!useText && !hasFeatures) {
           clearInterval(progressInterval);
           setIsTraining(false);
           setTrainingProgress(0);
           toast.error(
-            "Якщо TF-IDF вимкнено, потрібно увімкнути хоча б одну feature групу"
+            "Виберіть хоча б одну групу features або увімкніть 'Лексичні'"
           );
           return;
         }
@@ -333,11 +337,10 @@ function App() {
           model_type: "nb",
           mode: "single",
           models: wizardConfig?.models || [],
-          preprocessing: wizardConfig?.preprocessing || {},
+          // preprocessing має сенс тільки коли працюємо з текстом
+          preprocessing: useText ? (wizardConfig?.preprocessing || {}) : {},
           model_params: {
-            nb_variant: cfg.nb_variant || "complement",
-            vectorizer_type: cfg.vectorizer_type || "tfidf",
-            ngram_range: cfg.ngram_range || "1,2",
+            nb_variant: cfg.variant || cfg.nb_variant || "complement",
             // alpha: undefined → Colab робить auto-tuning по validation set.
             ...(cfg.alpha != null && cfg.alpha !== ""
               ? { alpha: parseFloat(cfg.alpha) }
@@ -345,6 +348,14 @@ function App() {
             tfidf_max_features: parseInt(cfg.tfidf_max_features || "50000", 10),
             additional_features: cfg.additional_features || null,
             use_text: useText,
+            // vectorizer/ngram передаємо тільки в text-режимі (інакше
+            // ML server їх ігнорує — clutter).
+            ...(useText
+              ? {
+                  vectorizer_type: cfg.vectorizer || cfg.vectorizer_type || "tfidf",
+                  ngram_range: cfg.ngram_range || cfg.ngram || "1,2",
+                }
+              : {}),
           },
         };
 

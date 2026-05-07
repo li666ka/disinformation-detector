@@ -4,19 +4,20 @@ Endpoints for LLM preset management.
 
 POST   /llm-presets                  — create and save a preset
 POST   /llm-presets/test             — try a config on one text WITHOUT saving
-POST   /llm-presets/random-samples   — fetch random examples from TRAINING_DF
-                                       (proxied to Colab if IS_COLAB=true)
+POST   /llm-presets/random-samples   — fetch random examples from local train split
 GET    /llm-presets/defaults         — default system_prompt, cot_instruction, models list
 """
 import json
-import os
+import random
 import time
 import logging
-import requests
+from pathlib import Path
+
+import pandas as pd
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from api.database import get_db, ModelRecord, User
+from api.database import get_db, ModelRecord, User, Dataset
 from api.auth import get_current_user
 from api.schemas import (
     LLMPresetCreate,
@@ -128,6 +129,7 @@ def create_preset(
         "system_prompt": req.system_prompt or DEFAULT_SYSTEM_PROMPT,
         "temperature": req.temperature,
         "max_output_tokens": req.max_output_tokens,
+        "include_social_context": req.include_social_context,
     }
 
     if req.mode == "few_shot":
@@ -160,51 +162,90 @@ def create_preset(
 @router.post("/random-samples", response_model=RandomSamplesResponse)
 def get_random_samples(
     req: RandomSamplesRequest,
-    _: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ):
     """
-    Get random FAKE/REAL examples from TRAINING_DF for few-shot.
-
-    Two modes:
-    1. IS_COLAB=true → proxy to Colab /dataset/samples endpoint
-    2. IS_COLAB=false → fetch from local Flask ML server (if available)
+    Get stratified random FAKE/REAL examples from the user's active dataset
+    train split: uploaded_datasets/user_<id>/dataset_<id>/<splits_subdir>/train.csv
     """
-    is_colab = os.getenv("IS_COLAB", "false").lower() in ("true", "1", "t")
-
-    if is_colab:
-        colab_url = os.environ.get("COLAB_NGROK_URL", "").strip().rstrip("/")
-        if not colab_url:
-            raise HTTPException(status_code=500, detail="COLAB_NGROK_URL not set")
-        try:
-            resp = requests.post(
-                f"{colab_url}/dataset/random_samples",
-                json={"n_fake": req.n_fake, "n_real": req.n_real},
-                timeout=30,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            return RandomSamplesResponse(examples=data.get("examples", []))
-        except requests.exceptions.ConnectionError:
-            raise HTTPException(status_code=503, detail="Colab недоступний")
-        except Exception as e:
-            raise HTTPException(status_code=502, detail=f"Colab error: {e}")
-
-    # Local mode: try Flask ML server on port 5050
-    try:
-        resp = requests.post(
-            "http://127.0.0.1:5050/dataset/random_samples",
-            json={"n_fake": req.n_fake, "n_real": req.n_real},
-            timeout=10,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        return RandomSamplesResponse(examples=data.get("examples", []))
-    except Exception as e:
+    active_ds = db.query(Dataset).filter(
+        Dataset.user_id == current_user.id,
+        Dataset.is_active == True,
+    ).first()
+    if not active_ds:
         raise HTTPException(
-            status_code=503,
-            detail=f"Не вдалося отримати приклади з датасету: {e}. "
-                   "Переконайтеся, що ML-сервер запущений або IS_COLAB=true.",
+            status_code=400,
+            detail="Немає активного датасету. Активуйте у Datasets page.",
         )
+
+    ds_path = Path("uploaded_datasets") / f"user_{current_user.id}" / f"dataset_{active_ds.id}"
+    news_path = ds_path / "news.csv"
+    train_path = ds_path / req.splits_subdir / "train.csv"
+
+    if not news_path.exists():
+        raise HTTPException(status_code=404, detail=f"news.csv не знайдено: {news_path}")
+    if not train_path.exists():
+        raise HTTPException(
+            status_code=404,
+            detail=f"train.csv не знайдено для {req.splits_subdir}: {train_path}",
+        )
+
+    try:
+        news_df = pd.read_csv(news_path, low_memory=False)
+        train_split = pd.read_csv(train_path)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Помилка читання даних: {e}")
+
+    train_aids = train_split["article_id"].astype(str).tolist()
+    news_df["article_id"] = news_df["article_id"].astype(str)
+    train_df = news_df[news_df["article_id"].isin(train_aids)].copy()
+
+    if train_df.empty:
+        raise HTTPException(
+            status_code=500,
+            detail="train.csv не співпадає з news.csv (всі IDs відсутні)",
+        )
+
+    fake_pool = train_df[train_df["article_label"].astype(str).str.upper() == "FAKE"]
+    real_pool = train_df[train_df["article_label"].astype(str).str.upper() == "REAL"]
+
+    if len(fake_pool) < req.n_fake:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Недостатньо FAKE прикладів у train: {len(fake_pool)} < {req.n_fake}",
+        )
+    if len(real_pool) < req.n_real:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Недостатньо REAL прикладів у train: {len(real_pool)} < {req.n_real}",
+        )
+
+    fake_samples = fake_pool.sample(n=req.n_fake) if req.n_fake > 0 else fake_pool.iloc[0:0]
+    real_samples = real_pool.sample(n=req.n_real) if req.n_real > 0 else real_pool.iloc[0:0]
+
+    examples = []
+    for _, row in fake_samples.iterrows():
+        text = (
+            str(row.get("article_title", "") or "") + ". " +
+            str(row.get("article_text", "") or "")
+        ).strip()
+        if len(text) > 500:
+            text = text[:497] + "..."
+        examples.append({"text": text, "label": "FAKE"})
+
+    for _, row in real_samples.iterrows():
+        text = (
+            str(row.get("article_title", "") or "") + ". " +
+            str(row.get("article_text", "") or "")
+        ).strip()
+        if len(text) > 500:
+            text = text[:497] + "..."
+        examples.append({"text": text, "label": "REAL"})
+
+    random.shuffle(examples)
+
+    return RandomSamplesResponse(examples=examples)
 
 
 # ── DELETE ────────────────────────────────────────────────────────────────

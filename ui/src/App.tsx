@@ -300,6 +300,16 @@ function App() {
             model_params: {
               integration_mode: cfg.integration_mode || "concat",
               additional_features: cfg.additional_features || null,
+              // From UI
+              epochs: cfg.epochs ?? 3,
+              max_length: cfg.max_length ?? 256,
+              freeze_base: cfg.freeze_base ?? true,
+              // Hardcoded literature defaults — не через UI
+              base_model: "distilbert-base-uncased",
+              batch_size: 16,
+              learning_rate: 2e-5,
+              weight_decay: 0.01,
+              warmup_ratio: 0.1,
             },
           };
 

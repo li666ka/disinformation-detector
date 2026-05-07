@@ -17,6 +17,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "./components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./components/ui/tabs";
+import { Checkbox } from "./components/ui/checkbox";
 import {
   Sparkles, Plus, Trash2, Loader2, X, Download, Target,
 } from "lucide-react";
@@ -73,11 +74,18 @@ export default function LLMPresetsPage() {
   // Few-shot: random samples
   const [nFake, setNFake] = useState(2);
   const [nReal, setNReal] = useState(2);
+  const [fewShotSplitsSubdir, setFewShotSplitsSubdir] = useState<string>("splits_in_domain");
   const [loadingRandom, setLoadingRandom] = useState(false);
+
+  // Social context augmentation
+  const [includeSocialContext, setIncludeSocialContext] = useState(false);
 
   // Evaluation
   const [evaluatingId, setEvaluatingId] = useState<number | null>(null);
   const [evalResult, setEvalResult] = useState<any>(null);
+  const [evaluationProgress, setEvaluationProgress] = useState<string | null>(null);
+  const [splitsSubdir, setSplitsSubdir] = useState<string>("splits_cross_domain");
+  const [maxEvalSamples, setMaxEvalSamples] = useState<number>(100);
 
   const fetchPresets = useCallback(async () => {
     try {
@@ -119,6 +127,7 @@ export default function LLMPresetsPage() {
     setTestText("");
     setTestResult(null);
     setManualText("");
+    setIncludeSocialContext(false);
     setCreateOpen(true);
   };
 
@@ -136,6 +145,7 @@ export default function LLMPresetsPage() {
         system_prompt: systemPrompt || null,
         temperature,
         max_output_tokens: maxTokens,
+        include_social_context: includeSocialContext,
       };
       if (mode === "few_shot" && fewShotExamples.length > 0) {
         payload.few_shot_examples = fewShotExamples;
@@ -159,20 +169,60 @@ export default function LLMPresetsPage() {
 
   const handleEvaluate = async (presetId: number) => {
     setEvaluatingId(presetId);
+    setEvaluationProgress(null);
     try {
-      const { data } = await api.post(`/models/${presetId}/evaluate`, {
-        max_samples: 100,
-        test_size: 0.2,
+      const { data: startData } = await api.post(`/models/${presetId}/evaluate`, {
+        max_samples: maxEvalSamples,
+        splits_subdir: splitsSubdir,
       });
-      setEvalResult(data);
-      await fetchPresets();
-      toast.success(
-        `Evaluation готова: accuracy ${(data.metrics.accuracy * 100).toFixed(1)}%`
-      );
+
+      const jobId = startData.job_id;
+      // Якщо backend не повернув job_id (старий synchronous flow для не-LLM) —
+      // приймаємо сторінкову відповідь напряму.
+      if (!jobId) {
+        setEvalResult(startData);
+        await fetchPresets();
+        if (startData?.metrics?.accuracy != null) {
+          toast.success(
+            `Evaluation готова: accuracy ${(startData.metrics.accuracy * 100).toFixed(1)}%`
+          );
+        }
+        return;
+      }
+
+      // Polling LLM job
+      const POLL_INTERVAL = 3000;
+      while (true) {
+        await new Promise((r) => setTimeout(r, POLL_INTERVAL));
+        const { data: status } = await api.get(`/models/llm-jobs/${jobId}`);
+
+        if (Array.isArray(status.progress) && status.progress[1] > 0) {
+          const [current, total] = status.progress;
+          setEvaluationProgress(`${current}/${total}`);
+        }
+
+        if (status.status === "done") {
+          await fetchPresets();
+          setEvalResult({ metrics: status.result });
+          const f1m = status.result?.f1_macro;
+          const acc = status.result?.accuracy;
+          toast.success(
+            `Evaluation completed: ${
+              f1m != null ? `F1-macro=${f1m.toFixed(3)}` : `acc=${(acc ?? 0).toFixed(3)}`
+            }`
+          );
+          break;
+        }
+        if (status.status === "failed") {
+          toast.error(`Evaluation failed: ${status.error || "unknown error"}`);
+          break;
+        }
+      }
     } catch (err: any) {
-      toast.error(err.response?.data?.detail || "Помилка оцінювання");
+      toast.error(err.response?.data?.detail || `Помилка оцінювання: ${err}`);
     } finally {
       setEvaluatingId(null);
+      setEvaluationProgress(null);
     }
   };
 
@@ -227,11 +277,12 @@ export default function LLMPresetsPage() {
       const { data } = await api.post<{ examples: FewShotExample[] }>("/llm-presets/random-samples", {
         n_fake: nFake,
         n_real: nReal,
+        splits_subdir: fewShotSplitsSubdir,
       });
       setFewShotExamples((prev) => [...prev, ...data.examples]);
       toast.success(`Додано ${data.examples.length} прикладів`);
     } catch (err: any) {
-      toast.error(err.response?.data?.detail || "Не вдалося завантажити приклади. Перевірте підключення до ML-сервера.");
+      toast.error(err.response?.data?.detail || "Не вдалося завантажити приклади з train split.");
     } finally {
       setLoadingRandom(false);
     }
@@ -284,11 +335,45 @@ export default function LLMPresetsPage() {
           </Button>
         </div>
       ) : (
-        <div className="rounded-md border">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Назва</TableHead>
+        <>
+          {/* Evaluation settings (для LLM presets) */}
+          <div className="flex flex-wrap items-end gap-3 mb-3 p-3 rounded-md border bg-muted/30">
+            <div className="space-y-1">
+              <Label className="text-xs">Test split</Label>
+              <Select value={splitsSubdir} onValueChange={setSplitsSubdir}>
+                <SelectTrigger className="w-[260px]"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="splits_in_domain">In-domain (gossip → gossip)</SelectItem>
+                  <SelectItem value="splits_cross_domain">Cross-domain (gossip → polit)</SelectItem>
+                  <SelectItem value="splits_mixed">Mixed</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">Max samples</Label>
+              <Select
+                value={String(maxEvalSamples)}
+                onValueChange={(v) => setMaxEvalSamples(parseInt(v, 10))}
+              >
+                <SelectTrigger className="w-[140px]"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {[50, 100, 200, 500, 1000].map((n) => (
+                    <SelectItem key={n} value={String(n)}>{n}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <p className="text-xs text-muted-foreground self-center ml-auto">
+              💡 Налаштування застосовуються при натисканні Evaluate.
+              LLM eval може займати 5–10 хв.
+            </p>
+          </div>
+
+          <div className="rounded-md border">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Назва</TableHead>
                 <TableHead>Модель</TableHead>
                 <TableHead>Режим</TableHead>
                 <TableHead className="text-center">Accuracy</TableHead>
@@ -314,9 +399,16 @@ export default function LLMPresetsPage() {
                       {cfg?.base_model || "?"}
                     </TableCell>
                     <TableCell>
-                      <Badge variant="secondary" className="text-xs">
-                        {cfg?.mode ? MODE_LABELS[cfg.mode as LLMMode] || cfg.mode : "?"}
-                      </Badge>
+                      <div className="flex items-center gap-1 flex-wrap">
+                        <Badge variant="secondary" className="text-xs">
+                          {cfg?.mode ? MODE_LABELS[cfg.mode as LLMMode] || cfg.mode : "?"}
+                        </Badge>
+                        {cfg?.include_social_context && (
+                          <Badge variant="outline" className="text-xs">
+                            +social
+                          </Badge>
+                        )}
+                      </div>
                     </TableCell>
                     <TableCell className="text-center">
                       {p.accuracy != null ? (
@@ -349,6 +441,11 @@ export default function LLMPresetsPage() {
                             <Target className="h-4 w-4" />
                           )}
                         </Button>
+                        {evaluatingId === p.id && evaluationProgress && (
+                          <span className="text-xs text-muted-foreground">
+                            {evaluationProgress}
+                          </span>
+                        )}
                         <Button
                           variant="ghost"
                           size="icon"
@@ -365,6 +462,7 @@ export default function LLMPresetsPage() {
             </TableBody>
           </Table>
         </div>
+        </>
       )}
 
       {/* ── Create Preset Dialog ───────────────────────────────────────── */}
@@ -477,24 +575,39 @@ export default function LLMPresetsPage() {
                   )}
 
                   {/* Add from dataset */}
-                  <div className="flex items-end gap-2 p-3 rounded-lg border">
-                    <div className="space-y-1">
-                      <Label className="text-xs">FAKE</Label>
-                      <Input
-                        type="number" min={0} max={10}
-                        value={nFake}
-                        onChange={(e) => setNFake(parseInt(e.target.value) || 0)}
-                        className="w-16 h-8"
-                      />
-                    </div>
-                    <div className="space-y-1">
-                      <Label className="text-xs">REAL</Label>
-                      <Input
-                        type="number" min={0} max={10}
-                        value={nReal}
-                        onChange={(e) => setNReal(parseInt(e.target.value) || 0)}
-                        className="w-16 h-8"
-                      />
+                  <div className="p-3 rounded-lg border space-y-2">
+                    <div className="grid grid-cols-3 gap-2">
+                      <div className="space-y-1">
+                        <Label className="text-xs">Train split</Label>
+                        <Select value={fewShotSplitsSubdir} onValueChange={setFewShotSplitsSubdir}>
+                          <SelectTrigger className="h-8 text-sm">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="splits_in_domain">In-domain</SelectItem>
+                            <SelectItem value="splits_cross_domain">Cross-domain</SelectItem>
+                            <SelectItem value="splits_mixed">Mixed</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="space-y-1">
+                        <Label className="text-xs">N FAKE</Label>
+                        <Input
+                          type="number" min={0} max={10}
+                          value={nFake}
+                          onChange={(e) => setNFake(parseInt(e.target.value) || 0)}
+                          className="h-8 text-sm"
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <Label className="text-xs">N REAL</Label>
+                        <Input
+                          type="number" min={0} max={10}
+                          value={nReal}
+                          onChange={(e) => setNReal(parseInt(e.target.value) || 0)}
+                          className="h-8 text-sm"
+                        />
+                      </div>
                     </div>
                     <Button
                       variant="outline" size="sm"
@@ -504,6 +617,9 @@ export default function LLMPresetsPage() {
                       {loadingRandom ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : <Download className="mr-1 h-3 w-3" />}
                       Додати з датасету
                     </Button>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      💡 Приклади зберігаються у preset. Натисніть знову для інших.
+                    </p>
                   </div>
 
                   {/* Add manual */}
@@ -568,6 +684,30 @@ export default function LLMPresetsPage() {
                 </div>
               </TabsContent>
             </Tabs>
+
+            {/* Social context augmentation */}
+            <div className="flex items-start gap-2 mt-4 p-3 border rounded-lg bg-blue-50/30 dark:bg-blue-950/20">
+              <Checkbox
+                id="include-social"
+                checked={includeSocialContext}
+                onCheckedChange={(c) => setIncludeSocialContext(c === true)}
+                className="mt-0.5"
+              />
+              <div>
+                <Label htmlFor="include-social" className="cursor-pointer font-medium">
+                  Включити social context
+                </Label>
+                <p className="text-xs text-muted-foreground mt-1">
+                  Передавати у prompt топ-5 твітів про статтю + профілі користувачів
+                  + 1 reply на кожен. LLM отримує більше контексту, але prompt
+                  стає довшим (~1000 символів).
+                </p>
+                <p className="text-xs text-amber-700 dark:text-amber-400 mt-1">
+                  💡 Рекомендовано для cross-domain тестування — допомагає LLM
+                  розрізнити надійні/анонімні джерела.
+                </p>
+              </div>
+            </div>
 
             {/* Test section */}
             <div className="border-t pt-4 space-y-3">

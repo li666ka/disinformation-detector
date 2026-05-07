@@ -315,7 +315,11 @@ def _build_batch_user_prompt(texts: list[str], examples: Optional[list[dict]] = 
     parts.append("Texts:\n")
 
     for i, t in enumerate(texts, 1):
-        cleaned = t[:1500].replace("\n", " ").strip()
+        # Якщо містить SOCIAL CONTEXT — зберегти структуру (newlines важливі)
+        if "[SOCIAL CONTEXT]" in t or "[ARTICLE]" in t:
+            cleaned = t[:4000].strip()
+        else:
+            cleaned = t[:1500].replace("\n", " ").strip()
         parts.append(f'{i}. """{cleaned}"""\n')
 
     return "\n".join(parts)

@@ -162,6 +162,9 @@ export interface NBModelConfig extends BaseModelConfig {
 export interface DistilBERTModelConfig extends BaseModelConfig {
   model: "distilbert";
   integration_mode: "concat" | "multiview";
+  epochs?: number;
+  max_length?: number;
+  freeze_base?: boolean;
 }
 
 export interface LLMModelConfig extends BaseModelConfig {
@@ -358,6 +361,9 @@ export interface NBParams {
 
 export interface DistilBERTParams {
   integration_mode: DistilBERTModelConfig["integration_mode"];
+  epochs?: number;
+  max_length?: number;
+  freeze_base?: boolean;
   additional_groups: FeatureGroupId[];
   feature_mask: Partial<FeatureMask>;
 }
@@ -587,6 +593,7 @@ export interface LLMPresetCreate {
   few_shot_examples?: FewShotExample[] | null;
   cot_instruction?: string | null;
   bagging_n_calls?: number;
+  include_social_context?: boolean;
 }
 
 export interface LLMPresetTestRequest {
@@ -598,7 +605,21 @@ export interface LLMPresetTestRequest {
   few_shot_examples?: FewShotExample[] | null;
   cot_instruction?: string | null;
   bagging_n_calls?: number;
+  include_social_context?: boolean;
   test_text: string;
+}
+
+/** Parsed shape of ModelRecord.llm_config JSON string. */
+export interface LLMPresetConfig {
+  base_model: string;
+  mode: LLMMode;
+  system_prompt?: string;
+  temperature?: number;
+  max_output_tokens?: number;
+  few_shot_examples?: FewShotExample[];
+  cot_instruction?: string;
+  bagging_n_calls?: number;
+  include_social_context?: boolean;
 }
 
 export interface LLMPresetTestResponse {

@@ -2,13 +2,21 @@ import os
 import json
 import logging
 import requests
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy.orm import Session
-from typing import List
+from typing import List, Optional
 from pydantic import BaseModel, Field
-from api.database import get_db, ModelRecord, Dataset, User
+from api.database import SessionLocal, get_db, ModelRecord, Dataset, User
 from api.auth import get_current_user
 from api.schemas import ModelRecordResponse
+from api.llm_evaluator import evaluate_llm_preset
+from api.llm_jobs import (
+    create_job,
+    get_status,
+    mark_done,
+    mark_failed,
+    update_progress,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +26,10 @@ router = APIRouter(prefix="/models", tags=["models"])
 class EvaluateModelRequest(BaseModel):
     max_samples: int = Field(default=100, ge=10, le=2000)
     test_size: float = Field(default=0.2, ge=0.1, le=0.5)
+    splits_subdir: Optional[str] = Field(
+        default="splits_cross_domain",
+        description="splits_in_domain | splits_cross_domain | splits_mixed",
+    )
 
 
 # Підмножина додаткових метрик з metrics_json, які UI рендерить як окремі плитки
@@ -183,14 +195,16 @@ def delete_model(
 def evaluate_model(
     model_id: int,
     req: EvaluateModelRequest,
+    background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """
     Прогнати модель на test split активного датасету, отримати метрики.
 
-    Для NB/DeBERTa: використовує існуючу натреновану модель (Colab lazy-load by model_path).
-    Для LLM: прогоняє preset через Colab /run_evaluation.
+    Для NB/DistilBERT/GNN: використовує натреновану модель (Colab lazy-load by model_path).
+    Для LLM: ЛОКАЛЬНО через api.llm_predictor.predict_batch_with_preset (async,
+    повертає job_id; UI робить polling /models/llm-jobs/{job_id}).
 
     Метрики зберігаються у ModelRecord для майбутніх порівнянь.
     """
@@ -205,6 +219,60 @@ def evaluate_model(
     if not active_ds:
         raise HTTPException(400, "Немає активного датасету. Активуйте у Datasets page.")
 
+    # ── LLM: локальна evaluation, асинхронна (НЕ через Colab) ──
+    if record.model_type == "llm":
+        try:
+            preset_config = json.loads(record.llm_config) if record.llm_config else {}
+        except json.JSONDecodeError as e:
+            raise HTTPException(500, f"Invalid llm_config JSON: {e}")
+
+        job_id = create_job()
+        user_id = current_user.id
+        dataset_id = active_ds.id
+        max_samples = req.max_samples
+        splits_subdir = req.splits_subdir or "splits_cross_domain"
+
+        def _run_llm_eval() -> None:
+            try:
+                metrics = evaluate_llm_preset(
+                    user_id=user_id,
+                    dataset_id=dataset_id,
+                    preset_config=preset_config,
+                    max_samples=max_samples,
+                    splits_subdir=splits_subdir,
+                    progress_callback=lambda c, t: update_progress(job_id, c, t),
+                )
+                # Save metrics to record (own session — we're outside the request)
+                with SessionLocal() as fresh_db:
+                    fresh_record = (
+                        fresh_db.query(ModelRecord)
+                        .filter(ModelRecord.id == model_id)
+                        .first()
+                    )
+                    if fresh_record:
+                        fresh_record.accuracy = metrics.get("accuracy")
+                        fresh_record.precision = metrics.get("precision")
+                        fresh_record.recall = metrics.get("recall")
+                        fresh_record.f1_score = metrics.get("f1_score")
+                        fresh_record.metrics_json = json.dumps(metrics)
+                        fresh_db.commit()
+                mark_done(job_id, metrics)
+            except Exception as e:
+                logger.exception(f"LLM evaluation failed for model {model_id}")
+                mark_failed(job_id, str(e))
+
+        background_tasks.add_task(_run_llm_eval)
+
+        return {
+            "job_id": job_id,
+            "status": "started",
+            "message": (
+                "LLM evaluation запущено асинхронно. "
+                "Опитуйте /models/llm-jobs/{job_id}"
+            ),
+        }
+
+    # ── NB / DistilBERT / GNN — на Colab (без змін) ──
     is_colab = os.getenv("IS_COLAB", "false").lower() in ("true", "1", "t")
     if not is_colab:
         raise HTTPException(503, "Evaluation потребує Colab (IS_COLAB=true)")
@@ -213,22 +281,7 @@ def evaluate_model(
     if not colab_base:
         raise HTTPException(500, "COLAB_NGROK_URL не встановлено")
 
-    if record.model_type == "llm":
-        try:
-            preset_config = json.loads(record.llm_config) if record.llm_config else {}
-        except json.JSONDecodeError as e:
-            raise HTTPException(500, f"Invalid llm_config JSON: {e}")
-
-        payload = {
-            "dataset_id": active_ds.id,
-            "dataset_name": active_ds.name,
-            "max_samples": req.max_samples,
-            "test_size": req.test_size,
-            "model_type": "llm",
-            "llm_config": preset_config,
-        }
-
-    elif record.model_type in ("nb", "deberta", "distilbert", "bert", "gin", "sage", "gnn"):
+    if record.model_type in ("nb", "deberta", "distilbert", "bert", "gin", "sage", "gnn"):
         if not record.model_path:
             raise HTTPException(
                 400,
@@ -329,3 +382,22 @@ def evaluate_model(
         "metrics": metrics,
         "samples": result.get("samples", []),
     }
+
+
+@router.get("/llm-jobs/{job_id}")
+def get_llm_job_status(
+    job_id: str,
+    _: User = Depends(get_current_user),
+):
+    """Polling статусу async LLM evaluation job (in-memory).
+
+    Повертає:
+        status: "pending" | "running" | "done" | "failed"
+        progress: [current, total]
+        result: dict з метриками (тільки якщо status="done")
+        error: рядок (тільки якщо status="failed")
+    """
+    status = get_status(job_id)
+    if status is None:
+        raise HTTPException(404, f"Job {job_id} not found")
+    return status

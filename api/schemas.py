@@ -121,6 +121,7 @@ class LLMPresetCreate(BaseModel):
     few_shot_examples: Optional[list[FewShotExample]] = None
     cot_instruction: Optional[str] = None
     bagging_n_calls: Optional[int] = Field(default=3, ge=2, le=10)
+    include_social_context: bool = Field(default=False)
 
     @field_validator("base_model")
     @classmethod
@@ -146,6 +147,7 @@ class LLMPresetTestRequest(BaseModel):
     few_shot_examples: Optional[list[FewShotExample]] = None
     cot_instruction: Optional[str] = None
     bagging_n_calls: Optional[int] = 3
+    include_social_context: bool = False
     test_text: str = Field(..., min_length=5, max_length=2000)
 
 
@@ -160,6 +162,10 @@ class LLMPresetTestResponse(BaseModel):
 class RandomSamplesRequest(BaseModel):
     n_fake: int = Field(default=2, ge=0, le=10)
     n_real: int = Field(default=2, ge=0, le=10)
+    splits_subdir: str = Field(
+        default="splits_in_domain",
+        description="splits_in_domain | splits_cross_domain | splits_mixed",
+    )
 
 
 class RandomSamplesResponse(BaseModel):

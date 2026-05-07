@@ -159,7 +159,14 @@ const DEFAULT_PARAMS: any = {
       stemming: false, lemmatization: true,
     },
   },
-  distilbert: { integration_mode: "concat", additional_groups: ["semantic"], feature_mask: buildDefaultMask(false, ["semantic"]) },
+  distilbert: {
+    integration_mode: "concat",
+    epochs: 3,
+    max_length: 256,
+    freeze_base: true,
+    additional_groups: ["semantic"],
+    feature_mask: buildDefaultMask(false, ["semantic"]),
+  },
   gin: {
     hidden_dim: "128",
     num_layers: "3",
@@ -324,7 +331,12 @@ export default function ClassificationWizard({ trainingMode = false, onConfigCha
         model.alpha = p.alpha || "1.0";
         model.use_text = p.use_text ?? true;
       }
-      if (type === "distilbert") { model.integration_mode = p.integration_mode || "concat"; }
+      if (type === "distilbert") {
+        model.integration_mode = p.integration_mode || "concat";
+        model.epochs = p.epochs ?? 3;
+        model.max_length = p.max_length ?? 256;
+        model.freeze_base = p.freeze_base ?? true;
+      }
       if (type === "gin" || type === "sage") {
         model.hidden_dim = p.hidden_dim || "128";
         model.num_layers = p.num_layers || (type === "gin" ? "3" : "2");
@@ -487,6 +499,63 @@ export default function ClassificationWizard({ trainingMode = false, onConfigCha
         return (
           <div className="space-y-4">
             <p className="text-sm text-muted-foreground">Fine-tuning DistilBERT на article_title + article_text (article-level)</p>
+
+            <div className="space-y-1">
+              <Label className="text-xs">Кількість епох</Label>
+              <Select
+                value={String(p.epochs ?? 3)}
+                onValueChange={(v) => upd("epochs", parseInt(v, 10))}
+              >
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="1">1 (швидкий тест)</SelectItem>
+                  <SelectItem value="2">2</SelectItem>
+                  <SelectItem value="3">3 (рекомендовано)</SelectItem>
+                  <SelectItem value="5">5 (для важких задач)</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                💡 Більше епох = довше тренування. Для baseline 3 достатньо.
+              </p>
+            </div>
+
+            <div className="space-y-1">
+              <Label className="text-xs">Максимальна довжина токенів</Label>
+              <Select
+                value={String(p.max_length ?? 256)}
+                onValueChange={(v) => upd("max_length", parseInt(v, 10))}
+              >
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="128">128 (швидко, втрата контексту)</SelectItem>
+                  <SelectItem value="256">256 (рекомендовано)</SelectItem>
+                  <SelectItem value="512">512 (повний контекст, повільно)</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                💡 Більше = повніший контекст статті, але повільніше тренування.
+              </p>
+            </div>
+
+            <div className="flex items-start gap-2">
+              <Checkbox
+                id={`distilbert-freeze-${type}`}
+                checked={p.freeze_base ?? true}
+                onCheckedChange={(checked) => upd("freeze_base", checked === true)}
+                className="mt-0.5"
+              />
+              <div>
+                <label htmlFor={`distilbert-freeze-${type}`} className="text-sm font-medium cursor-pointer">
+                  Заморозити базову модель
+                </label>
+                <p className="text-xs text-muted-foreground">
+                  💡 Якщо увімкнено — тренуються тільки останні 2 шари + classifier
+                  (швидко). Вимкніть для повного fine-tuning (повільніше, але
+                  краще на in-domain).
+                </p>
+              </div>
+            </div>
+
             <AdditionalFeaturesSection type={type} groups={groups} mask={p.feature_mask} params={p} toggleGroup={toggleGroup} toggleFeature={toggleFeature} setParam={setParam} togglePreprocessing={togglePreprocessing} setModelParams={setModelParams} />
           </div>
         );
@@ -730,7 +799,14 @@ export default function ClassificationWizard({ trainingMode = false, onConfigCha
                     </>
                   );
                 })()}
-                {mid === "distilbert" && <p><span className="font-medium">Інтеграція:</span> {({ concat: "Concat", multiview: "Multi-view" } as any)[p.integration_mode || "concat"]}</p>}
+                {mid === "distilbert" && (
+                  <>
+                    <p><span className="font-medium">Інтеграція:</span> {({ concat: "Concat", multiview: "Multi-view" } as any)[p.integration_mode || "concat"]}</p>
+                    <p><span className="font-medium">Епох:</span> {p.epochs ?? 3}</p>
+                    <p><span className="font-medium">Max length:</span> {p.max_length ?? 256} tokens</p>
+                    <p><span className="font-medium">База:</span> {(p.freeze_base ?? true) ? "заморожена (швидко)" : "повний fine-tuning"}</p>
+                  </>
+                )}
                 {(mid === "gin" || mid === "sage") && (
                   <>
                     <p><span className="font-medium">Hidden dim:</span> {p.hidden_dim || "128"}</p>

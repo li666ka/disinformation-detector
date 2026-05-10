@@ -66,8 +66,9 @@ DEFAULT_BATCH_SYSTEM_PROMPT = (
     "For EACH text, classify as REAL or FAKE.\n\n"
     "Analyze each for: factual claims without evidence, emotional manipulation, "
     "anonymous authority references, conspiracy framing, clickbait patterns, logical fallacies.\n\n"
-    "Respond ONLY with a valid JSON array, one object per text in the SAME ORDER:\n"
-    '[{"id": 1, "label": "FAKE", "confidence": 0.85, "reason": "brief"}, ...]'
+    "Respond ONLY with a valid JSON array. Each input has a 'Text ID N:' marker — you MUST include "
+    'the matching "text_id" field in each output object so we can match input to output:\n'
+    '[{"text_id": 0, "label": "FAKE", "confidence": 0.85, "reason": "brief"}, ...]'
 )
 
 DEFAULT_COT_INSTRUCTION = (
@@ -80,6 +81,20 @@ DEFAULT_COT_INSTRUCTION = (
 )
 
 
+# Module-level counter for monitoring parse health.
+# Read via get_parse_failure_stats() from health endpoints / dashboards.
+_parse_failures = Counter()
+
+
+def get_parse_failure_stats() -> dict:
+    """Return cumulative parse-failure reasons for monitoring."""
+    return dict(_parse_failures)
+
+
+def reset_parse_failure_stats() -> None:
+    _parse_failures.clear()
+
+
 # ─────────────────────────────────────────────────────────────────
 # CORE: Claude Code CLI invocation
 # ─────────────────────────────────────────────────────────────────
@@ -88,12 +103,8 @@ class ClaudeCLIError(RuntimeError):
     """Помилка виклику claude CLI (timeout, exit_code, parse fail)."""
 
 
-def _check_environment() -> None:
-    """
-    Перевірити що:
-      1. ANTHROPIC_API_KEY не встановлений (інакше біллинг піде через API)
-      2. claude CLI доступний у PATH
-    """
+def _check_api_key_unset() -> None:
+    """ANTHROPIC_API_KEY must NOT be set — Max-plan OAuth would be bypassed and billing flips to API."""
     if os.environ.get("ANTHROPIC_API_KEY"):
         raise RuntimeError(
             "❌ ANTHROPIC_API_KEY встановлений у env. "
@@ -101,22 +112,42 @@ def _check_environment() -> None:
             "інакше calls будуть біллитись на API account замість Max plan."
         )
 
+
+def _check_claude_available() -> tuple[bool, str]:
+    """
+    Lightweight CLI availability probe used for graceful fallback.
+    Returns (is_available, error_message). Never raises.
+    """
     try:
         result = subprocess.run(
             [CLAUDE_CLI, "--version"],
             capture_output=True,
             text=True,
-            timeout=10,
+            timeout=5,
         )
-        if result.returncode != 0:
-            raise ClaudeCLIError(f"claude --version exit_code={result.returncode}")
     except FileNotFoundError:
-        raise RuntimeError(
-            f"❌ `{CLAUDE_CLI}` CLI не знайдено у PATH. "
-            "Встановіть Claude Code: https://claude.com/claude-code"
-        )
+        return False, f"'{CLAUDE_CLI}' not found in PATH"
     except subprocess.TimeoutExpired:
-        raise ClaudeCLIError("claude --version timed out")
+        return False, "claude --version timed out"
+    except Exception as e:
+        return False, f"unexpected error: {e}"
+
+    if result.returncode != 0:
+        return False, f"claude --version exit_code={result.returncode}"
+    return True, ""
+
+
+def _check_environment() -> None:
+    """Hard check used by legacy callers: API key + CLI must both be OK."""
+    _check_api_key_unset()
+    available, error = _check_claude_available()
+    if not available:
+        if "not found in PATH" in error:
+            raise RuntimeError(
+                f"❌ `{CLAUDE_CLI}` CLI не знайдено у PATH. "
+                "Встановіть Claude Code: https://claude.com/claude-code"
+            )
+        raise ClaudeCLIError(error)
 
 
 def _call_claude_cli(
@@ -177,107 +208,174 @@ def _call_claude_cli(
 # RESPONSE PARSING
 # ─────────────────────────────────────────────────────────────────
 
-def _parse_response(text: str) -> dict:
-    """Parse Claude's JSON response into {label, confidence, reason}."""
-    if not text:
-        return {"label": "UNCERTAIN", "confidence": 0.5, "reason": "empty_response"}
+def _fallback_result(reason: str) -> dict:
+    """Standard UNCERTAIN result. Logs to _parse_failures for monitoring."""
+    _parse_failures[reason] += 1
+    return {"label": "UNCERTAIN", "confidence": 0.5, "reason": reason}
 
-    # Find first {...} JSON object
+
+def _normalize_label(raw: str) -> str:
+    """Coerce arbitrary text into REAL/FAKE/UNCERTAIN."""
+    label = str(raw or "").upper().strip()
+    if label in ("REAL", "FAKE", "UNCERTAIN"):
+        return label
+    if any(kw in label for kw in ("FAKE", "FALSE", "MISINFO")):
+        return "FAKE"
+    if any(kw in label for kw in ("REAL", "TRUE", "FACTUAL", "CREDIBLE")):
+        return "REAL"
+    return "UNCERTAIN"
+
+
+def _parse_response(text: str) -> dict:
+    """
+    Parse Claude's JSON response into {label, confidence, reason}.
+
+    Strategy:
+      1. Try to locate a JSON object containing "label" → parse strictly.
+      2. Try a broader {...} match.
+      3. If JSON parse fails, regex-extract REAL/FAKE from plain text.
+      4. Last resort: UNCERTAIN with reason set for monitoring.
+    """
+    if not text:
+        return _fallback_result("empty_response")
+
     match = re.search(r'\{[^{}]*"label"[^{}]*\}', text, re.DOTALL)
     if not match:
-        # Try broader pattern
-        match = re.search(r'\{.*?\}', text, re.DOTALL)
+        match = re.search(r'\{.+\}', text, re.DOTALL)
 
     if match:
         try:
-            data = json.loads(match.group())
-            label = str(data.get("label", "UNCERTAIN")).upper().strip()
-            if label not in ("REAL", "FAKE"):
-                # Try keyword normalization
-                if any(kw in label for kw in ("FAKE", "FALSE", "MISINFO")):
-                    label = "FAKE"
-                elif any(kw in label for kw in ("REAL", "TRUE", "FACTUAL", "CREDIBLE")):
-                    label = "REAL"
-                else:
-                    label = "UNCERTAIN"
-            return {
-                "label": label,
-                "confidence": float(data.get("confidence", 0.5)),
-                "reason": str(data.get("reason", ""))[:300],
-            }
-        except (json.JSONDecodeError, ValueError):
-            pass
+            data = json.loads(match.group(0))
+            label = _normalize_label(data.get("label", "UNCERTAIN"))
 
-    # Fallback: keyword matching у raw тексті
-    upper = text.upper()
-    if "FAKE" in upper and "REAL" not in upper:
-        return {"label": "FAKE", "confidence": 0.6, "reason": "fallback_regex"}
-    if "REAL" in upper and "FAKE" not in upper:
-        return {"label": "REAL", "confidence": 0.6, "reason": "fallback_regex"}
-    return {"label": "UNCERTAIN", "confidence": 0.5, "reason": "parse_error"}
+            try:
+                confidence = float(data.get("confidence", 0.5))
+            except (ValueError, TypeError):
+                confidence = 0.5
+            confidence = max(0.0, min(1.0, confidence))
+
+            reason = str(data.get("reason", "")).strip()[:300]
+            return {"label": label, "confidence": confidence, "reason": reason}
+        except (json.JSONDecodeError, ValueError) as e:
+            logger.error("JSON parse failed: %s\nRaw output:\n%s", e, text[:500])
+
+    # Plain-text fallback — no JSON or JSON broken; extract bare label
+    label_match = re.search(r'\b(FAKE|REAL)\b', text, re.IGNORECASE)
+    if label_match:
+        extracted = label_match.group(1).upper()
+        logger.warning("Extracted label '%s' from non-JSON response", extracted)
+        _parse_failures["extracted_from_non_json_response"] += 1
+        return {
+            "label": extracted,
+            "confidence": 0.5,
+            "reason": "extracted_from_non_json_response",
+        }
+
+    logger.error("Could not parse label from response:\n%s", text[:500])
+    return _fallback_result("parse_failed")
 
 
-def _parse_batch_response(text: str, expected_count: int) -> list[dict]:
+def _parse_batch_response(text: str, expected_count: int) -> list[Optional[dict]]:
     """
-    Парсить batch response — array з [{"id": N, "label": ..., ...}, ...]
-    Returns list of {label, confidence, reason} у порядку id (1, 2, 3, ...).
-    Якщо менше item ніж expected_count — заповнює UNCERTAIN.
-    """
-    fallback = lambda: [
-        {"label": "UNCERTAIN", "confidence": 0.5, "reason": "batch_parse_failed"}
-        for _ in range(expected_count)
-    ]
+    Parse batch response — JSON array of {text_id, label, confidence, reason}.
 
+    Returns list of length `expected_count`. Slots without a matching text_id are None;
+    callers (predict_batch_with_preset) fill these with UNCERTAIN.
+
+    Backward compat: if items lack `text_id` but have legacy `id` (1-based) or no id at all,
+    we fall back to that ordering rather than dropping responses.
+    """
     if not text:
-        return fallback()
+        logger.warning("Empty batch response")
+        _parse_failures["batch_empty_response"] += 1
+        return [None] * expected_count
 
-    # Find JSON array
-    match = re.search(r'\[.*\]', text, re.DOTALL)
+    match = re.search(r'\[.+\]', text, re.DOTALL)
     if not match:
-        logger.warning(f"No JSON array in batch response: {text[:200]}")
-        return fallback()
+        logger.warning("No JSON array in batch response: %s", text[:200])
+        _parse_failures["batch_no_array"] += 1
+        return [None] * expected_count
 
     try:
-        arr = json.loads(match.group())
-        if not isinstance(arr, list):
-            return fallback()
+        arr = json.loads(match.group(0))
     except json.JSONDecodeError as e:
-        logger.warning(f"Batch JSON parse failed: {e}, raw={match.group()[:200]}")
-        return fallback()
+        logger.warning("Batch JSON parse failed: %s, raw=%s", e, match.group(0)[:300])
+        _parse_failures["batch_json_invalid"] += 1
+        return [None] * expected_count
 
-    # Sort by 'id' if present, else preserve order
-    if all(isinstance(x, dict) and "id" in x for x in arr):
-        try:
-            arr = sorted(arr, key=lambda x: int(x.get("id", 0)))
-        except (ValueError, TypeError):
-            pass
+    if not isinstance(arr, list):
+        logger.warning("Batch response is not a list: %s", type(arr).__name__)
+        _parse_failures["batch_not_list"] += 1
+        return [None] * expected_count
 
-    results = []
-    for item in arr[:expected_count]:
+    # Detect ordering source: prefer text_id (0-based), fall back to id (1-based), else positional.
+    has_text_id = any(isinstance(x, dict) and "text_id" in x for x in arr)
+    has_legacy_id = any(isinstance(x, dict) and "id" in x for x in arr)
+
+    results_by_id: dict[int, dict] = {}
+    positional: list[Optional[dict]] = []
+
+    for pos, item in enumerate(arr):
         if not isinstance(item, dict):
-            results.append({"label": "UNCERTAIN", "confidence": 0.5, "reason": "non_dict_item"})
+            logger.warning("Non-dict batch item at pos=%d: %r", pos, item)
+            _parse_failures["batch_non_dict_item"] += 1
+            positional.append(None)
             continue
 
-        label = str(item.get("label", "UNCERTAIN")).upper().strip()
-        if label not in ("REAL", "FAKE"):
-            if any(kw in label for kw in ("FAKE", "FALSE")):
-                label = "FAKE"
-            elif any(kw in label for kw in ("REAL", "TRUE")):
-                label = "REAL"
-            else:
-                label = "UNCERTAIN"
-
-        results.append({
-            "label": label,
-            "confidence": float(item.get("confidence", 0.5)),
+        parsed = {
+            "label": _normalize_label(item.get("label", "UNCERTAIN")),
+            "confidence": _coerce_confidence(item.get("confidence", 0.5)),
             "reason": str(item.get("reason", ""))[:200],
-        })
+        }
 
-    # Pad if response shorter
-    while len(results) < expected_count:
-        results.append({"label": "UNCERTAIN", "confidence": 0.5, "reason": "missing_in_response"})
+        if has_text_id:
+            tid = item.get("text_id")
+            if tid is None:
+                logger.warning("Batch item missing text_id: %r", item)
+                _parse_failures["batch_missing_text_id"] += 1
+                positional.append(parsed)
+                continue
+            try:
+                results_by_id[int(tid)] = parsed
+            except (ValueError, TypeError):
+                logger.warning("Batch item invalid text_id=%r", tid)
+                _parse_failures["batch_invalid_text_id"] += 1
+        elif has_legacy_id:
+            lid = item.get("id")
+            try:
+                # Legacy id is 1-based — convert to 0-based
+                results_by_id[int(lid) - 1] = parsed
+            except (ValueError, TypeError):
+                positional.append(parsed)
+        else:
+            positional.append(parsed)
 
-    return results
+    # Reassemble in order
+    if results_by_id:
+        ordered: list[Optional[dict]] = []
+        for i in range(expected_count):
+            if i in results_by_id:
+                ordered.append(results_by_id[i])
+            else:
+                logger.warning("Missing batch result for text_id=%d", i)
+                _parse_failures["batch_missing_index"] += 1
+                ordered.append(None)
+        return ordered
+
+    # Pure positional fallback
+    ordered = positional[:expected_count]
+    while len(ordered) < expected_count:
+        _parse_failures["batch_short_response"] += 1
+        ordered.append(None)
+    return ordered
+
+
+def _coerce_confidence(value) -> float:
+    try:
+        c = float(value)
+    except (ValueError, TypeError):
+        return 0.5
+    return max(0.0, min(1.0, c))
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -301,27 +399,39 @@ def _build_user_prompt_cot(text: str, cot_instruction: str) -> str:
 
 
 def _build_batch_user_prompt(texts: list[str], examples: Optional[list[dict]] = None) -> str:
-    """Build prompt for batch classification of multiple texts."""
+    """
+    Build prompt for batch classification.
+
+    Each text gets a `Text ID N:` marker (0-based) and the LLM must echo `text_id` back
+    so we can validate ordering in _parse_batch_response.
+    """
     parts = []
 
     if examples:
         parts.append("Reference examples:\n")
-        for i, ex in enumerate(examples[:5], 1):
+        for ex in examples[:5]:
             parts.append(f"  {ex['label']}: {ex['text'][:300]}")
         parts.append("")
 
-    parts.append(f"Now classify each of the following {len(texts)} texts as FAKE or REAL.")
-    parts.append("Respond with a JSON array, one object per text, in the same order.\n")
+    parts.append(
+        f"Classify each of the following {len(texts)} texts. "
+        "IMPORTANT: include a 'text_id' field in each response object that matches "
+        "the 'Text ID' marker — this is how we pair output to input.\n"
+    )
     parts.append("Texts:\n")
 
-    for i, t in enumerate(texts, 1):
-        # Якщо містить SOCIAL CONTEXT — зберегти структуру (newlines важливі)
+    for i, t in enumerate(texts):
+        # If contains SOCIAL CONTEXT — preserve structure (newlines matter)
         if "[SOCIAL CONTEXT]" in t or "[ARTICLE]" in t:
             cleaned = t[:4000].strip()
         else:
             cleaned = t[:1500].replace("\n", " ").strip()
-        parts.append(f'{i}. """{cleaned}"""\n')
+        parts.append(f'Text ID {i}: """{cleaned}"""\n')
 
+    parts.append(
+        f"\nRespond with a JSON array of {len(texts)} objects, each shaped: "
+        '{"text_id": N, "label": "FAKE"|"REAL", "confidence": 0.0-1.0, "reason": "brief"}'
+    )
     return "\n".join(parts)
 
 
@@ -345,10 +455,23 @@ def predict_with_preset(text: str, preset_config: dict) -> dict:
 
     Returns: {label, confidence, reason, base_model_used, mode, n_calls, votes?}
     """
-    _check_environment()
+    _check_api_key_unset()
 
     mode = preset_config.get("mode", "zero_shot")
     base_model = preset_config.get("base_model", DEFAULT_BASE_MODEL)
+
+    available, error = _check_claude_available()
+    if not available:
+        logger.error("Claude CLI unavailable: %s", error)
+        return {
+            "label": "UNCERTAIN",
+            "confidence": 0.5,
+            "reason": f"claude_cli_unavailable: {error}",
+            "base_model_used": "none",
+            "mode": mode,
+            "n_calls": 0,
+        }
+
     system_prompt = preset_config.get("system_prompt") or DEFAULT_SYSTEM_PROMPT
 
     # Build user prompt based on mode
@@ -474,13 +597,28 @@ def predict_batch_with_preset(
         list of dicts (один per text у тому ж порядку):
         [{label, confidence, reason, base_model_used, mode}, ...]
     """
-    _check_environment()
+    _check_api_key_unset()
 
     if not texts:
         return []
 
     base_model = preset_config.get("base_model", DEFAULT_BASE_MODEL)
     mode = preset_config.get("mode", "zero_shot")
+
+    available, error = _check_claude_available()
+    if not available:
+        logger.error("Claude CLI unavailable for batch: %s", error)
+        return [
+            {
+                "label": "UNCERTAIN",
+                "confidence": 0.5,
+                "reason": f"claude_cli_unavailable: {error}",
+                "base_model_used": "none",
+                "mode": mode,
+            }
+            for _ in texts
+        ]
+
     custom_system = preset_config.get("system_prompt")
 
     # For batch, prefer batch-specific system prompt
@@ -505,18 +643,23 @@ def predict_batch_with_preset(
 
         try:
             raw_text = _call_claude_cli(full_prompt, model=base_model, timeout=BATCH_TIMEOUT)
-            batch_results = _parse_batch_response(raw_text, expected_count=len(batch_texts))
+            raw_results = _parse_batch_response(raw_text, expected_count=len(batch_texts))
         except ClaudeCLIError as e:
             logger.error(f"Batch {batch_idx+1}/{n_batches} failed: {e}")
-            batch_results = [
-                {"label": "UNCERTAIN", "confidence": 0.5, "reason": f"batch_failed: {str(e)[:100]}"}
-                for _ in batch_texts
-            ]
+            raw_results = [None] * len(batch_texts)
+            cli_error = str(e)[:100]
+        else:
+            cli_error = None
 
-        # Annotate with metadata
-        for r in batch_results:
+        # Convert None slots to UNCERTAIN; annotate metadata for backward compat.
+        batch_results = []
+        for r in raw_results:
+            if r is None:
+                reason = f"batch_failed: {cli_error}" if cli_error else "missing_in_response"
+                r = {"label": "UNCERTAIN", "confidence": 0.5, "reason": reason}
             r["base_model_used"] = base_model
             r["mode"] = mode
+            batch_results.append(r)
 
         all_results.extend(batch_results)
 

@@ -113,8 +113,18 @@ def evaluate_llm_preset(
 
     include_social = bool(preset_config.get("include_social_context", False))
 
+    n_total_articles = len(test_df)
+
+    # Initial progress signal — UI shows 0/N immediately (instead of 0/0 until first batch)
+    if progress_callback:
+        progress_callback(0, n_total_articles)
+
     texts: list[str] = []
-    for _, row in test_df.iterrows():
+    n_with_ctx = 0
+    n_without_ctx = 0
+    t_prompt_start = time.time()
+
+    for prompt_idx, (_, row) in enumerate(test_df.iterrows(), 1):
         article_text = str(row["article_text_full"])
 
         if include_social:
@@ -124,26 +134,41 @@ def evaluate_llm_preset(
                 article_id=str(row["article_id"]),
                 n_tweets=5,
                 n_replies_per_tweet=1,
+                max_tweet_chars=250,
+                max_reply_chars=150,
+                include_overview=True,
+                include_minority_voices=True,
             )
             if social_ctx:
-                augmented = (
-                    f"{social_ctx}\n\n"
-                    f"[ARTICLE]\n{article_text}"
-                )
-                texts.append(augmented)
+                n_with_ctx += 1
+                texts.append(f"{social_ctx}\n\n[ARTICLE]\n{article_text}")
             else:
-                # Fallback: немає твітів → передати тільки текст з міткою
-                texts.append(
-                    f"[NO SOCIAL CONTEXT AVAILABLE]\n\n"
-                    f"[ARTICLE]\n{article_text}"
-                )
+                n_without_ctx += 1
+                texts.append(f"[NO SOCIAL CONTEXT AVAILABLE]\n\n[ARTICLE]\n{article_text}")
         else:
             texts.append(article_text)
 
-    logger.info(
-        f"Built {len(texts)} prompts "
-        f"(social_context={'on' if include_social else 'off'})"
-    )
+        # Per-record log (every 10) so user can tell prompt building is alive
+        if prompt_idx % 10 == 0 or prompt_idx == n_total_articles:
+            logger.info(
+                f"Prompts built: {prompt_idx}/{n_total_articles} "
+                f"(social_ctx={n_with_ctx} found, {n_without_ctx} missing)"
+            )
+
+    prompt_elapsed = time.time() - t_prompt_start
+    if include_social:
+        if n_with_ctx == 0:
+            logger.warning(
+                "include_social_context=True but 0/%d articles got tweets — "
+                "перевірте чи tweets.csv підвантажений у dataset",
+                n_total_articles,
+            )
+        logger.info(
+            "Built %d prompts in %.1fs (social_context=on, with_ctx=%d, missing=%d)",
+            len(texts), prompt_elapsed, n_with_ctx, n_without_ctx,
+        )
+    else:
+        logger.info("Built %d prompts in %.1fs (social_context=off)", len(texts), prompt_elapsed)
 
     y_true = test_df["y_true"].values
 
@@ -155,12 +180,17 @@ def evaluate_llm_preset(
     y_pred: list[int] = []
     confidences: list[float] = []
 
+    t_predict_start = time.time()
+
     for i in range(n_batches):
         batch_start = i * batch_size
         batch_end = min(batch_start + batch_size, n_total)
         batch_texts = texts[batch_start:batch_end]
 
-        logger.info(f"Batch {i + 1}/{n_batches} ({len(batch_texts)} texts)")
+        logger.info(
+            f"Batch {i + 1}/{n_batches} ({len(batch_texts)} texts) — "
+            f"processed so far: {batch_start}/{n_total}"
+        )
 
         try:
             results = predict_batch_with_preset(batch_texts, preset_config)
@@ -184,6 +214,13 @@ def evaluate_llm_preset(
                 confidences.append(1.0 - conf)
             else:
                 confidences.append(0.5)
+
+        elapsed = time.time() - t_predict_start
+        eta = (n_batches - i - 1) * (elapsed / (i + 1))
+        logger.info(
+            f"Progress: {batch_end}/{n_total} processed "
+            f"({elapsed:.0f}s elapsed, ETA {eta:.0f}s)"
+        )
 
         if progress_callback:
             progress_callback(batch_end, n_total)

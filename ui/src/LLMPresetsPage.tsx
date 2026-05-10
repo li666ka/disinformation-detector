@@ -19,7 +19,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./components/ui/tabs";
 import { Checkbox } from "./components/ui/checkbox";
 import {
-  Sparkles, Plus, Trash2, Loader2, X, Download, Target,
+  Sparkles, Plus, Trash2, Loader2, X, Download, Target, Pencil,
 } from "lucide-react";
 import { toast } from "sonner";
 import type {
@@ -79,6 +79,11 @@ export default function LLMPresetsPage() {
 
   // Social context augmentation
   const [includeSocialContext, setIncludeSocialContext] = useState(false);
+
+  // Rename
+  const [renameId, setRenameId] = useState<number | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+  const [renaming, setRenaming] = useState(false);
 
   // Evaluation
   const [evaluatingId, setEvaluatingId] = useState<number | null>(null);
@@ -223,6 +228,31 @@ export default function LLMPresetsPage() {
     } finally {
       setEvaluatingId(null);
       setEvaluationProgress(null);
+    }
+  };
+
+  const openRename = (p: ModelRecord) => {
+    setRenameId(p.id);
+    setRenameValue(p.name);
+  };
+
+  const handleRename = async () => {
+    if (renameId == null) return;
+    const newName = renameValue.trim();
+    if (!newName) {
+      toast.error("Назва не може бути порожньою");
+      return;
+    }
+    setRenaming(true);
+    try {
+      await api.patch(`/llm-presets/${renameId}`, { name: newName });
+      await fetchPresets();
+      setRenameId(null);
+      toast.success("Пресет перейменовано");
+    } catch (err: any) {
+      toast.error(err.response?.data?.detail || "Помилка перейменування");
+    } finally {
+      setRenaming(false);
     }
   };
 
@@ -446,6 +476,15 @@ export default function LLMPresetsPage() {
                             {evaluationProgress}
                           </span>
                         )}
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8"
+                          title="Перейменувати"
+                          onClick={() => openRename(p)}
+                        >
+                          <Pencil className="h-4 w-4" />
+                        </Button>
                         <Button
                           variant="ghost"
                           size="icon"
@@ -758,6 +797,35 @@ export default function LLMPresetsPage() {
             <Button variant="outline" onClick={() => setCreateOpen(false)}>Скасувати</Button>
             <Button onClick={handleSave} disabled={saving || !name.trim()}>
               {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Зберегти
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Rename Preset Dialog ──────────────────────────────────────── */}
+      <Dialog open={renameId !== null} onOpenChange={(o) => !o && setRenameId(null)}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Перейменувати пресет</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-2">
+            <Label>Нова назва</Label>
+            <Input
+              value={renameValue}
+              onChange={(e) => setRenameValue(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && renameValue.trim() && !renaming) {
+                  handleRename();
+                }
+              }}
+              autoFocus
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setRenameId(null)}>Скасувати</Button>
+            <Button onClick={handleRename} disabled={renaming || !renameValue.trim()}>
+              {renaming && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               Зберегти
             </Button>
           </DialogFooter>

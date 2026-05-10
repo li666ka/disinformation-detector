@@ -20,7 +20,7 @@ import {
 import {
   Database, Upload, Download, Trash2, CheckCircle2, MoreVertical,
   FileText, Users, MessageCircle, Heart, Repeat2, Loader2, BarChart3,
-  Edit3, AlertTriangle, Shield, TrendingUp, Info,
+  Edit3, AlertTriangle, Shield, TrendingUp, Info, HardDrive,
 } from "lucide-react";
 import {
   Tooltip, TooltipContent, TooltipProvider, TooltipTrigger,
@@ -85,6 +85,10 @@ export default function DatasetsPage() {
   // Analytics modal
   const [analyticsDataset, setAnalyticsDataset] = useState<Dataset | null>(null);
 
+  // Embedding cache info per-dataset
+  const [cacheInfo, setCacheInfo] = useState<Record<number, any>>({});
+  const [cacheBusy, setCacheBusy] = useState<number | null>(null);
+
   // Rename modal
   const [renameOpen, setRenameOpen] = useState(false);
   const [renameDataset, setRenameDataset] = useState<Dataset | null>(null);
@@ -123,6 +127,39 @@ export default function DatasetsPage() {
       toast.success("Датасет видалено");
     } catch (err: any) {
       toast.error(err.response?.data?.detail || "Помилка видалення");
+    }
+  };
+
+  const checkCacheInfo = async (datasetId: number) => {
+    setCacheBusy(datasetId);
+    try {
+      const { data } = await api.get(`/datasets/${datasetId}/embedding-cache`);
+      setCacheInfo((prev) => ({ ...prev, [datasetId]: data }));
+      if (data?.exists) {
+        toast.success(`Кеш: ${data.total_size_mb} MB`);
+      } else {
+        toast.info(data?.error || data?.reason || "Кешу немає");
+      }
+    } catch (err: any) {
+      toast.error(err.response?.data?.detail || "Помилка перевірки кешу");
+    } finally {
+      setCacheBusy(null);
+    }
+  };
+
+  const invalidateCache = async (datasetId: number) => {
+    if (!window.confirm("Видалити кешовані ембединги? Наступне тренування буде довшим.")) {
+      return;
+    }
+    setCacheBusy(datasetId);
+    try {
+      await api.delete(`/datasets/${datasetId}/embedding-cache`);
+      setCacheInfo((prev) => ({ ...prev, [datasetId]: { exists: false } }));
+      toast.success("Кеш видалено");
+    } catch (err: any) {
+      toast.error(err.response?.data?.detail || "Не вдалося видалити кеш");
+    } finally {
+      setCacheBusy(null);
     }
   };
 
@@ -338,6 +375,24 @@ export default function DatasetsPage() {
                         }}>
                           <Edit3 className="mr-2 h-4 w-4" /> Редагувати
                         </DropdownMenuItem>
+                        <DropdownMenuItem
+                          disabled={cacheBusy === ds.id}
+                          onClick={() => checkCacheInfo(ds.id)}
+                        >
+                          <HardDrive className="mr-2 h-4 w-4" />
+                          {cacheInfo[ds.id]?.exists
+                            ? `Кеш: ${cacheInfo[ds.id]?.total_size_mb ?? "?"} MB`
+                            : "Перевірити кеш ембедингів"}
+                        </DropdownMenuItem>
+                        {cacheInfo[ds.id]?.exists && (
+                          <DropdownMenuItem
+                            className="text-destructive"
+                            disabled={cacheBusy === ds.id}
+                            onClick={() => invalidateCache(ds.id)}
+                          >
+                            <Trash2 className="mr-2 h-4 w-4" /> Очистити кеш
+                          </DropdownMenuItem>
+                        )}
                         <DropdownMenuItem
                           className="text-destructive"
                           onClick={() => handleDelete(ds.id)}

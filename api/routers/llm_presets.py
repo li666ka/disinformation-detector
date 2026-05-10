@@ -21,6 +21,7 @@ from api.database import get_db, ModelRecord, User, Dataset
 from api.auth import get_current_user
 from api.schemas import (
     LLMPresetCreate,
+    LLMPresetUpdate,
     LLMPresetTestRequest,
     LLMPresetTestResponse,
     RandomSamplesRequest,
@@ -246,6 +247,45 @@ def get_random_samples(
     random.shuffle(examples)
 
     return RandomSamplesResponse(examples=examples)
+
+
+# ── PATCH (rename) ────────────────────────────────────────────────────────
+
+@router.patch("/{preset_id}", response_model=ModelRecordResponse)
+def update_preset(
+    preset_id: int,
+    req: LLMPresetUpdate,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    """Rename an LLM preset."""
+    record = db.query(ModelRecord).filter(
+        ModelRecord.id == preset_id,
+        ModelRecord.model_type == "llm",
+    ).first()
+    if not record:
+        raise HTTPException(status_code=404, detail="LLM preset not found")
+
+    new_name = req.name.strip()
+    if not new_name:
+        raise HTTPException(status_code=400, detail="Name cannot be empty")
+
+    if new_name != record.name:
+        clash = db.query(ModelRecord).filter(
+            ModelRecord.name == new_name,
+            ModelRecord.model_type == "llm",
+            ModelRecord.id != preset_id,
+        ).first()
+        if clash:
+            raise HTTPException(
+                status_code=400,
+                detail=f"LLM preset with name '{new_name}' already exists",
+            )
+        record.name = new_name
+        db.commit()
+        db.refresh(record)
+        logger.info(f"Renamed LLM preset id={preset_id} -> '{new_name}'")
+    return record
 
 
 # ── DELETE ────────────────────────────────────────────────────────────────

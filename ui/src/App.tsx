@@ -199,8 +199,11 @@ function App() {
       } else {
         parts.push(mtype);
       }
-      const feats = describeFeatures(cfg);
-      if (feats) parts.push(feats);
+      const isGNN = mtype === "gin" || mtype === "sage";
+      if (!isGNN) {
+        const feats = describeFeatures(cfg);
+        if (feats) parts.push(feats);
+      }
       return parts.join(" ");
     };
 

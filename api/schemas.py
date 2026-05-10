@@ -138,6 +138,10 @@ class LLMPresetCreate(BaseModel):
         return v
 
 
+class LLMPresetUpdate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=200)
+
+
 class LLMPresetTestRequest(BaseModel):
     base_model: str
     mode: str
@@ -210,25 +214,49 @@ class LLMConfig(BaseModel):
 
 
 class GINConfig(BaseModel):
+    """GIN model config. Не приймає additional_features (GNN використовує MiniLM)."""
     model: Literal["gin"]
     hidden_dim: str = "128"
     num_layers: str = "3"
     dropout: str = "0.5"
     learning_rate: str = "0.001"
     epochs: str = "50"
-    pooling: str = "mean"
+    pooling: Literal["mean", "sum", "max"] = "mean"
     additional_features: Optional[AdditionalFeatures] = None
+
+    @field_validator("additional_features")
+    @classmethod
+    def warn_if_features_set(cls, v):
+        if v is not None:
+            import logging
+            logging.getLogger(__name__).warning(
+                "GIN model received additional_features but ignores them "
+                "(node features = MiniLM embeddings). Setting to None."
+            )
+        return None
 
 
 class GraphSAGEConfig(BaseModel):
+    """GraphSAGE model config. Не приймає additional_features."""
     model: Literal["sage"]
     hidden_dim: str = "128"
     num_layers: str = "2"
     dropout: str = "0.5"
     learning_rate: str = "0.001"
     epochs: str = "50"
-    aggregator: str = "mean"
+    aggregator: Literal["mean", "max", "lstm"] = "mean"
     additional_features: Optional[AdditionalFeatures] = None
+
+    @field_validator("additional_features")
+    @classmethod
+    def warn_if_features_set(cls, v):
+        if v is not None:
+            import logging
+            logging.getLogger(__name__).warning(
+                "SAGE model received additional_features but ignores them. "
+                "Setting to None."
+            )
+        return None
 
 
 ModelConfig = Annotated[

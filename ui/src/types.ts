@@ -172,7 +172,12 @@ export interface LLMModelConfig extends BaseModelConfig {
   mode: "single" | "bagging";
 }
 
-export interface GINModelConfig extends BaseModelConfig {
+/**
+ * GNN models не використовують handcrafted features.
+ * Node features = MiniLM sentence embeddings; граф (article→tweets→retweets/replies)
+ * задає індуктивний bias.
+ */
+export interface GINModelConfig {
   model: "gin";
   hidden_dim: string;
   num_layers: string;
@@ -180,9 +185,11 @@ export interface GINModelConfig extends BaseModelConfig {
   learning_rate: string;
   epochs: string;
   pooling: "mean" | "sum" | "max";
+  /** Завжди null для GNN — не використовуємо handcrafted features. */
+  additional_features: null;
 }
 
-export interface SAGEModelConfig extends BaseModelConfig {
+export interface SAGEModelConfig {
   model: "sage";
   hidden_dim: string;
   num_layers: string;
@@ -190,6 +197,8 @@ export interface SAGEModelConfig extends BaseModelConfig {
   learning_rate: string;
   epochs: string;
   aggregator: "mean" | "max" | "lstm";
+  /** Завжди null для GNN — не використовуємо handcrafted features. */
+  additional_features: null;
 }
 
 export type ModelConfig =

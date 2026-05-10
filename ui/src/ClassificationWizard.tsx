@@ -7,7 +7,7 @@ import { Badge } from "./components/ui/badge";
 import { Checkbox } from "./components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./components/ui/select";
 import { Label } from "./components/ui/label";
-import { Check, ChevronLeft, ChevronRight, Users, User as UserIcon } from "lucide-react";
+import { Check, ChevronLeft, ChevronRight, Users, User as UserIcon, Info } from "lucide-react";
 import type { Dataset, FeatureGroupDef } from "./types";
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -174,8 +174,7 @@ const DEFAULT_PARAMS: any = {
     learning_rate: "0.001",
     epochs: "50",
     pooling: "mean",
-    additional_groups: ["semantic"],
-    feature_mask: buildDefaultMask(false, ["semantic"]),
+    // GNN не використовує handcrafted features — node features = MiniLM embeddings.
   },
   sage: {
     hidden_dim: "128",
@@ -184,8 +183,7 @@ const DEFAULT_PARAMS: any = {
     learning_rate: "0.001",
     epochs: "50",
     aggregator: "mean",
-    additional_groups: ["semantic"],
-    feature_mask: buildDefaultMask(false, ["semantic"]),
+    // Аналогічно GIN — без handcrafted features.
   },
 };
 
@@ -317,13 +315,20 @@ export default function ClassificationWizard({ trainingMode = false, onConfigCha
     const modelTypes = mode === "single" ? [selectedModel] : selectedModels;
     const models = modelTypes.map((type: string) => {
       const p = modelParams[type] || getDefaultParams(type);
-      const groups = p.additional_groups || [];
-      const mask = p.feature_mask || buildDefaultMask(false);
-      const hasAnyFeature = Object.values(mask).some(Boolean);
-      const hasGroups = groups.length > 0;
+      const isGNN = type === "gin" || type === "sage";
       const model: any = { model: type };
-      if (hasGroups || hasAnyFeature) { model.additional_features = { groups, mask }; }
-      else { model.additional_features = null; }
+
+      if (!isGNN) {
+        const groups = p.additional_groups || [];
+        const mask = p.feature_mask || buildDefaultMask(false);
+        const hasAnyFeature = Object.values(mask).some(Boolean);
+        const hasGroups = groups.length > 0;
+        if (hasGroups || hasAnyFeature) { model.additional_features = { groups, mask }; }
+        else { model.additional_features = null; }
+      } else {
+        // GNN: завжди null — node features = MiniLM embeddings.
+        model.additional_features = null;
+      }
       if (type === "nb") {
         model.variant = p.variant || "complement";
         model.vectorizer = p.vectorizer || "tfidf";
@@ -569,6 +574,17 @@ export default function ClassificationWizard({ trainingMode = false, onConfigCha
                 ? "Graph Isomorphism Network — навчання на графі новина→твіти→retweet/reply з MiniLM ембеддингами вузлів"
                 : "GraphSAGE — inductive GNN з sampling-агрегацією сусідів у графі поширення новини"}
             </p>
+
+            <div className="flex items-start gap-2 p-3 rounded-lg bg-blue-500/5 border border-blue-500/20">
+              <Info className="w-4 h-4 mt-0.5 text-blue-500 flex-shrink-0" />
+              <div className="text-xs text-muted-foreground">
+                <strong className="text-foreground">Без додаткових фічей.</strong>{" "}
+                {isGin ? "GIN" : "GraphSAGE"} використовує MiniLM ембединги текстів
+                (статті, твіти, ретвіти, відповіді) як ознаки вузлів.
+                Структура графа поширення новини задає індуктивний bias.
+              </div>
+            </div>
+
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label className="text-xs">Hidden dim</Label>
@@ -651,7 +667,6 @@ export default function ClassificationWizard({ trainingMode = false, onConfigCha
                 </div>
               )}
             </div>
-            <AdditionalFeaturesSection type={type} groups={groups} mask={p.feature_mask} params={p} toggleGroup={toggleGroup} toggleFeature={toggleFeature} setParam={setParam} togglePreprocessing={togglePreprocessing} setModelParams={setModelParams} />
           </div>
         );
       }
@@ -818,7 +833,9 @@ export default function ClassificationWizard({ trainingMode = false, onConfigCha
                     {mid === "sage" && <p><span className="font-medium">Aggregator:</span> {p.aggregator || "mean"}</p>}
                   </>
                 )}
-                <p><span className="font-medium">Ознаки:</span> {groups.length > 0 ? groups.map((g: string) => getGroupLabel(g, mid)).join(", ") : "вимкнено"}{activeCount > 0 ? ` (${activeCount} додаткових)` : ""}</p>
+                {mid !== "gin" && mid !== "sage" && (
+                  <p><span className="font-medium">Ознаки:</span> {groups.length > 0 ? groups.map((g: string) => getGroupLabel(g, mid)).join(", ") : "вимкнено"}{activeCount > 0 ? ` (${activeCount} додаткових)` : ""}</p>
+                )}
               </div>
             );
           })}

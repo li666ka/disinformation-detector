@@ -24,7 +24,7 @@ from sqlalchemy.orm import Session
 
 from api.database import get_db, Dataset, User
 from api.auth import get_current_user
-from api.colab_sync import ensure_dataset_on_colab, ColabSyncError
+from api.colab_sync import ensure_dataset_on_colab, ColabSyncError, _colab_base_url
 from api.dataset_service import (
     validate_zip_structure,
     validate_csv_schemas,
@@ -485,6 +485,67 @@ def delete_dataset(
         logger.warning(f"Could not delete folder {folder_path}: {e}")
 
     return {"ok": True, "deleted_id": dataset_id}
+
+
+# ── Embedding cache management ───────────────────────────────────────────
+
+@router.get("/{dataset_id}/embedding-cache")
+def get_embedding_cache_info(
+    dataset_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Перевірити чи закешовано ембединги для dataset."""
+    record = db.query(Dataset).filter(
+        Dataset.id == dataset_id,
+        Dataset.user_id == current_user.id,
+    ).first()
+    if not record:
+        raise HTTPException(404, "Датасет не знайдено")
+
+    try:
+        base = _colab_base_url()
+    except ColabSyncError as e:
+        return {"exists": False, "error": str(e)}
+    if base is None:
+        return {"exists": False, "reason": "ML server unavailable (local mode)"}
+
+    try:
+        resp = requests.get(f"{base}/embedding_cache/{dataset_id}", timeout=30)
+        resp.raise_for_status()
+        return resp.json()
+    except requests.RequestException as e:
+        logger.error(f"Cache info request failed: {e}")
+        return {"exists": False, "error": str(e)}
+
+
+@router.delete("/{dataset_id}/embedding-cache")
+def invalidate_embedding_cache(
+    dataset_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Видалити ембединги cache для dataset (форс re-encode)."""
+    record = db.query(Dataset).filter(
+        Dataset.id == dataset_id,
+        Dataset.user_id == current_user.id,
+    ).first()
+    if not record:
+        raise HTTPException(404, "Датасет не знайдено")
+
+    try:
+        base = _colab_base_url()
+    except ColabSyncError as e:
+        raise HTTPException(503, f"ML server unavailable: {e}")
+    if base is None:
+        raise HTTPException(503, "ML server unavailable (local mode)")
+
+    try:
+        resp = requests.delete(f"{base}/embedding_cache/{dataset_id}", timeout=30)
+        resp.raise_for_status()
+        return resp.json()
+    except requests.RequestException as e:
+        raise HTTPException(503, f"Cache invalidation failed: {e}")
 
 
 # ── GET /datasets/active/info ────────────────────────────────────────────

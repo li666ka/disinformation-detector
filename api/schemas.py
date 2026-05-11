@@ -64,8 +64,6 @@ class ModelRecordResponse(BaseModel):
     # Extra metrics — заповнюються із metrics_json через _enrich_with_metrics_json.
     # Не зберігаються окремими SQL колонками: source of truth — metrics_json.
     f1_macro: Optional[float] = None
-    f1_fake: Optional[float] = None
-    f1_real: Optional[float] = None
     roc_auc: Optional[float] = None
     metrics_json: Optional[str] = None
     is_active: bool

@@ -594,9 +594,9 @@ function App() {
                       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
                         {[
                           { icon: Target, label: "Accuracy", value: trainingResults.accuracy },
-                          { icon: Crosshair, label: "Precision", value: trainingResults.precision },
-                          { icon: Activity, label: "Recall", value: trainingResults.recall },
-                          { icon: Award, label: "F1 Score", value: trainingResults.f1_score },
+                          { icon: Crosshair, label: "Precision (FAKE)", value: trainingResults.precision },
+                          { icon: Activity, label: "Recall (FAKE)", value: trainingResults.recall },
+                          { icon: Award, label: "F1 (FAKE)", value: trainingResults.f1_score },
                           ...(trainingResults.f1_macro != null
                             ? [{ icon: Award, label: "F1 Macro", value: trainingResults.f1_macro }]
                             : []),
@@ -618,7 +618,8 @@ function App() {
 
                       {/* Confusion Matrix */}
                       <div>
-                        <h3 className="text-sm font-semibold mb-3">Матриця помилок</h3>
+                        <h3 className="text-sm font-semibold mb-1">Матриця помилок</h3>
+                        <p className="text-xs text-muted-foreground mb-3">FAKE = позитивний клас</p>
                         <div className="overflow-hidden rounded-lg border">
                           <table className="w-full text-sm">
                             <thead>

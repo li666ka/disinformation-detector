@@ -23,10 +23,8 @@ interface EvaluationResult {
         precision: number;
         recall: number;
         f1_score: number;
-        // GNN-specific (optional)
+        // Optional (всі моделі повертають однаковий набір)
         f1_macro?: number;
-        f1_fake?: number;
-        f1_real?: number;
         roc_auc?: number;
         best_epoch?: number;
         confusion_matrix?: { tn: number; fp: number; fn: number; tp: number };
@@ -90,9 +88,9 @@ export default function EvaluationResultsModal({
                     <div className="grid grid-cols-4 gap-3">
                         {[
                             { label: "Accuracy", value: m.accuracy, color: "text-green-600" },
-                            { label: "Precision", value: m.precision, color: "text-blue-600" },
-                            { label: "Recall", value: m.recall, color: "text-violet-600" },
-                            { label: "F1", value: m.f1_score, color: "text-amber-600" },
+                            { label: "Precision (FAKE)", value: m.precision, color: "text-blue-600" },
+                            { label: "Recall (FAKE)", value: m.recall, color: "text-violet-600" },
+                            { label: "F1 (FAKE)", value: m.f1_score, color: "text-amber-600" },
                         ].map((metric) => (
                             <Card key={metric.label}>
                                 <CardContent className="pt-5 pb-4 text-center">
@@ -105,15 +103,13 @@ export default function EvaluationResultsModal({
                         ))}
                     </div>
 
-                    {/* GNN-specific metrics — show only if available */}
-                    {(m.f1_macro != null || m.f1_fake != null || m.f1_real != null || m.roc_auc != null) && (
+                    {/* Additional metrics — show only if available */}
+                    {(m.f1_macro != null || m.roc_auc != null) && (
                         <div>
-                            <h3 className="text-sm font-semibold mb-2">Додаткові метрики (GNN)</h3>
-                            <div className="grid grid-cols-4 gap-3">
+                            <h3 className="text-sm font-semibold mb-2">Додаткові метрики</h3>
+                            <div className="grid grid-cols-2 gap-3">
                                 {[
                                     { label: "F1 (macro)", value: m.f1_macro, color: "text-emerald-600" },
-                                    { label: "F1 (FAKE)", value: m.f1_fake, color: "text-red-600" },
-                                    { label: "F1 (REAL)", value: m.f1_real, color: "text-green-600" },
                                     { label: "ROC AUC", value: m.roc_auc, color: "text-indigo-600" },
                                 ].map((metric) => (
                                     <Card key={metric.label}>
@@ -137,7 +133,8 @@ export default function EvaluationResultsModal({
                     {/* Confusion Matrix */}
                     {cm && (
                         <div>
-                            <h3 className="text-sm font-semibold mb-2">Матриця помилок</h3>
+                            <h3 className="text-sm font-semibold mb-1">Матриця помилок</h3>
+                            <p className="text-xs text-muted-foreground mb-2">FAKE = позитивний клас</p>
                             <div className="overflow-hidden rounded-lg border">
                                 <table className="w-full text-sm">
                                     <thead>

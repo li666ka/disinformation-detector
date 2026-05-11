@@ -255,7 +255,7 @@ function ModelsPage() {
                           </div>
                         </div>
                       )}
-                      {(m.f1_macro != null || m.f1_fake != null || m.f1_real != null || m.roc_auc != null) && (
+                      {(m.f1_macro != null || m.roc_auc != null) && (
                         <div className="grid grid-cols-2 gap-1 text-[11px] mt-1">
                           {m.f1_macro != null && (
                             <div className="rounded bg-emerald-50 dark:bg-emerald-950/30 p-1 text-center">
@@ -271,22 +271,6 @@ function ModelsPage() {
                                 {(m.roc_auc * 100).toFixed(1)}%
                               </div>
                               <div className="text-muted-foreground">ROC AUC</div>
-                            </div>
-                          )}
-                          {m.f1_fake != null && (
-                            <div className="rounded bg-rose-50 dark:bg-rose-950/30 p-1 text-center">
-                              <div className="font-semibold text-rose-600 dark:text-rose-400">
-                                {(m.f1_fake * 100).toFixed(1)}%
-                              </div>
-                              <div className="text-muted-foreground">F1 fake</div>
-                            </div>
-                          )}
-                          {m.f1_real != null && (
-                            <div className="rounded bg-teal-50 dark:bg-teal-950/30 p-1 text-center">
-                              <div className="font-semibold text-teal-600 dark:text-teal-400">
-                                {(m.f1_real * 100).toFixed(1)}%
-                              </div>
-                              <div className="text-muted-foreground">F1 real</div>
                             </div>
                           )}
                         </div>

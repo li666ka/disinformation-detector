@@ -241,60 +241,43 @@ def evaluate_llm_preset(
     if len(y_true_clean) == 0:
         raise RuntimeError("All LLM predictions failed")
 
-    # ── Compute metrics ──
-    metrics: dict = {
-        "accuracy": float(accuracy_score(y_true_clean, y_pred_clean)),
-        "precision": float(
-            precision_score(
-                y_true_clean, y_pred_clean, pos_label=1, zero_division=0,
-            )
-        ),
-        "recall": float(
-            recall_score(
-                y_true_clean, y_pred_clean, pos_label=1, zero_division=0,
-            )
-        ),
-        "f1_score": float(
-            f1_score(
-                y_true_clean, y_pred_clean, pos_label=1, zero_division=0,
-            )
-        ),
-        "f1_macro": float(
-            f1_score(
-                y_true_clean, y_pred_clean, average="macro", zero_division=0,
-            )
-        ),
-        "f1_fake": float(
-            f1_score(
-                y_true_clean, y_pred_clean, pos_label=1, zero_division=0,
-            )
-        ),
-        "f1_real": float(
-            f1_score(
-                y_true_clean, y_pred_clean, pos_label=0, zero_division=0,
-            )
-        ),
-    }
+    # ── Compute metrics через ЄДИНУ функцію ──
+    # ml_server може бути недоступний у цьому процесі — fallback локальна копія
+    try:
+        from ml_server.utils import compute_metrics  # type: ignore
+    except ImportError:
+        def compute_metrics(y_true, y_pred, training_time=None, y_proba=None):
+            y_true = np.asarray(y_true)
+            y_pred = np.asarray(y_pred)
+            cm = confusion_matrix(y_true, y_pred, labels=[0, 1])
+            tn, fp, fn, tp = (int(cm[0, 0]), int(cm[0, 1]), int(cm[1, 0]), int(cm[1, 1]))
+            result = {
+                "accuracy": float(accuracy_score(y_true, y_pred)),
+                "precision": float(precision_score(y_true, y_pred, pos_label=1, zero_division=0)),
+                "recall": float(recall_score(y_true, y_pred, pos_label=1, zero_division=0)),
+                "f1_score": float(f1_score(y_true, y_pred, pos_label=1, zero_division=0)),
+                "f1_macro": float(f1_score(y_true, y_pred, average="macro", zero_division=0)),
+                "confusion_matrix": {"tn": tn, "fp": fp, "fn": fn, "tp": tp},
+            }
+            if y_proba is not None and len(np.unique(y_true)) >= 2:
+                try:
+                    proba = np.asarray(y_proba)
+                    if proba.ndim == 2 and proba.shape[1] >= 2:
+                        proba = proba[:, 1]
+                    result["roc_auc"] = float(roc_auc_score(y_true, proba))
+                except Exception:
+                    result["roc_auc"] = None
+            else:
+                result["roc_auc"] = None
+            if training_time is not None:
+                result["training_time"] = round(training_time, 2)
+            return result
 
-    cm = confusion_matrix(y_true_clean, y_pred_clean, labels=[0, 1])
-    metrics["confusion_matrix"] = {
-        "tn": int(cm[0, 0]),
-        "fp": int(cm[0, 1]),
-        "fn": int(cm[1, 0]),
-        "tp": int(cm[1, 1]),
-    }
-
-    # ROC-AUC потребує >= 2 класів у y_true
-    if len(np.unique(y_true_clean)) >= 2:
-        try:
-            metrics["roc_auc"] = float(
-                roc_auc_score(y_true_clean, conf_clean)
-            )
-        except Exception as e:
-            logger.warning(f"ROC-AUC failed: {e}")
-            metrics["roc_auc"] = None
-    else:
-        metrics["roc_auc"] = None
+    metrics = compute_metrics(
+        y_true=y_true_clean,
+        y_pred=y_pred_clean,
+        y_proba=conf_clean,
+    )
 
     metrics["n_evaluated"] = int(len(y_true_clean))
     metrics["n_errors"] = n_errors
@@ -302,7 +285,11 @@ def evaluate_llm_preset(
     metrics["evaluation_time"] = round(time.time() - t_start, 2)
 
     logger.info(
-        f"LLM evaluation done: acc={metrics['accuracy']:.4f}, "
+        f"LLM evaluation done (FAKE class for P/R/F1): "
+        f"acc={metrics['accuracy']:.4f}, "
+        f"precision={metrics['precision']:.4f}, "
+        f"recall={metrics['recall']:.4f}, "
+        f"f1={metrics['f1_score']:.4f}, "
         f"f1_macro={metrics['f1_macro']:.4f}, "
         f"roc_auc={metrics['roc_auc']}, "
         f"time={metrics['evaluation_time']}s"

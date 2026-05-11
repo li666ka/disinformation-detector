@@ -240,10 +240,15 @@ export interface TopWords {
   real: Array<{ word: string; score: number }>;
 }
 
+/** Confusion matrix для бінарної класифікації, де FAKE = positive class (1). */
 export interface ConfusionMatrix {
+  /** True Negative — REAL правильно класифіковано як REAL. */
   tn: number;
+  /** False Positive — REAL помилково класифіковано як FAKE. */
   fp: number;
+  /** False Negative — FAKE помилково класифіковано як REAL. */
   fn: number;
+  /** True Positive — FAKE правильно класифіковано як FAKE. */
   tp: number;
 }
 
@@ -277,14 +282,17 @@ export interface PredictResponse {
 
 export interface TrainResponse {
   // flat metrics (merged from response.metrics by App.tsx)
+  /** Загальна точність для обох класів. */
   accuracy: number;
+  /** Precision для FAKE класу (pos_label=1). */
   precision: number;
+  /** Recall для FAKE класу (pos_label=1). */
   recall: number;
+  /** F1 для FAKE класу (pos_label=1). */
   f1_score: number;
-  // Optional extras — present in metrics_json after training (esp. for class-imbalanced datasets)
+  /** Незважене середнє F1 для обох класів (FAKE та REAL). */
   f1_macro?: number;
-  f1_fake?: number;
-  f1_real?: number;
+  /** ROC-AUC: probabilistic метрика; FAKE = positive class. */
   roc_auc?: number;
   confusion_matrix?: ConfusionMatrix;
   train_size: number;
@@ -336,14 +344,18 @@ export interface ModelRecord {
   name: string;
   model_type: string;
   pipeline_type?: PipelineType;
+  /** Загальна точність для обох класів. */
   accuracy?: number;
+  /** Precision для FAKE класу (pos_label=1). */
   precision?: number;
+  /** Recall для FAKE класу (pos_label=1). */
   recall?: number;
+  /** F1 для FAKE класу (pos_label=1). */
   f1_score?: number;
-  // GNN-specific metrics (optional — present in metrics_json after evaluation)
+  // Additional metrics (optional — present in metrics_json after evaluation)
+  /** Незважене середнє F1 для обох класів. */
   f1_macro?: number;
-  f1_fake?: number;
-  f1_real?: number;
+  /** ROC-AUC: probabilistic метрика; FAKE = positive class. */
   roc_auc?: number;
   best_epoch?: number;
   metrics_json?: string | null;

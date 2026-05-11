@@ -34,7 +34,8 @@ class EvaluateModelRequest(BaseModel):
 
 # Підмножина додаткових метрик з metrics_json, які UI рендерить як окремі плитки
 # (f1_macro / ROC AUC у ModelsPage, F1 per-class у EvaluationResultsModal).
-_EXTRA_METRIC_KEYS = ("f1_macro", "f1_fake", "f1_real", "roc_auc")
+# Метрики, що зберігаються лише у metrics_json (не SQL колонки) і рендеряться у UI.
+_EXTRA_METRIC_KEYS = ("f1_macro", "roc_auc")
 
 
 def _serialize_model(
@@ -61,11 +62,10 @@ def _serialize_model(
         return resp
 
     # Fallback для колонок P/R/F1, якщо вони NULL у БД (старі записи).
-    # Приймаємо як `precision`, так і `precision_macro` (формат ML server).
     column_fallbacks = {
-        "precision": ("precision", "precision_macro"),
-        "recall": ("recall", "recall_macro"),
-        "f1_score": ("f1_score", "f1_macro"),
+        "precision": ("precision",),
+        "recall": ("recall",),
+        "f1_score": ("f1_score",),
         "accuracy": ("accuracy",),
     }
     for field, keys in column_fallbacks.items():

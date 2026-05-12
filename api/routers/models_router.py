@@ -243,6 +243,9 @@ def evaluate_model(
                     progress_callback=lambda c, t: update_progress(job_id, c, t),
                 )
                 # Save metrics to record (own session — we're outside the request)
+                # Витягуємо predictions_compact окремо, щоб metrics_json не дублював
+                # повний JSON предсказань (вони у predictions_json).
+                predictions_compact = metrics.pop("_predictions_compact", None)
                 with SessionLocal() as fresh_db:
                     fresh_record = (
                         fresh_db.query(ModelRecord)
@@ -255,6 +258,8 @@ def evaluate_model(
                         fresh_record.recall = metrics.get("recall")
                         fresh_record.f1_score = metrics.get("f1_score")
                         fresh_record.metrics_json = json.dumps(metrics)
+                        if predictions_compact:
+                            fresh_record.predictions_json = json.dumps(predictions_compact)
                         fresh_db.commit()
                 mark_done(job_id, metrics)
             except Exception as e:

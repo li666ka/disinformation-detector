@@ -301,7 +301,22 @@ def evaluate_llm_preset(
         f"time={metrics['evaluation_time']}s"
     )
 
-    # Save predictions для подальшого використання в ансамблях
+    # Compact predictions JSON — для БД (single source of truth для ансамблів).
+    predictions_compact = {
+        "article_ids": [str(a) for a in article_ids_clean.tolist()],
+        "y_true": [int(v) for v in y_true_clean.tolist()],
+        "y_pred": [int(v) for v in y_pred_clean.tolist()],
+        "y_proba_fake": [float(v) for v in conf_clean.tolist()],
+        "model_type": "llm",
+        "splits_used": splits_subdir,
+        "dataset_id": str(dataset_id),
+        "test_size": int(len(y_true_clean)),
+        "created_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+    }
+    metrics["_predictions_compact"] = predictions_compact
+
+    # Save predictions у файл (Drive backup) — best-effort, не критично якщо
+    # ml_server недоступний у поточному оточенні.
     try:
         import os as _os
 
@@ -331,6 +346,6 @@ def evaluate_llm_preset(
             dataset_id=dataset_id,
         )
     except Exception as e:
-        logger.warning(f"Failed to save LLM predictions: {e}")
+        logger.warning(f"Failed to save LLM predictions file (continuing — БД має JSON): {e}")
 
     return metrics

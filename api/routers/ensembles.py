@@ -13,119 +13,59 @@ from __future__ import annotations
 
 import json
 import logging
-import os
-from pathlib import Path
 from typing import Optional
 
+import numpy as np
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from api.auth import get_current_user
-from api.database import Dataset, Ensemble, ModelRecord, User, get_db
-from api.ensemble_voting import evaluate_ensemble, load_predictions
+from api.database import Ensemble, ModelRecord, User, get_db
+from api.ensemble_voting import evaluate_ensemble
 from api.schemas import EnsembleCreate, EnsembleResponse, EnsembleSummary
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/ensembles", tags=["ensembles"])
 
 
-# ── Helpers: знайти predictions.json для моделі ────────────────────────
+# ── Predictions JSON helpers (single source of truth = ModelRecord.predictions_json) ──
 
-def _models_root() -> Path:
-    return Path(os.environ.get("MODELS_ROOT", "models"))
-
-
-def _candidate_dirs_for_model(model: ModelRecord) -> list[Path]:
-    """Можливі директорії де може лежати predictions.json для цієї моделі."""
-    out: list[Path] = []
-    if not model.model_path:
-        return out
-
-    p = Path(model.model_path)
-    parent = p.parent if p.suffix == ".pkl" else p
-    out.append(parent)  # NB: user_X/nb_<exp>/
-
-    # DistilBERT/GNN: model_path = user_X/model_<exp>.pkl; subdir = user_X/<type>_<exp>/
-    if p.suffix == ".pkl" and p.stem.startswith("model_"):
-        exp_id = p.stem[len("model_"):]
-        type_prefix_map = {
-            "nb": "nb",
-            "distilbert": "distilbert",
-            "deberta": "deberta",
-            "bert": "distilbert",
-            "gin": "gnn",
-            "sage": "gnn",
-            "gnn": "gnn",
-        }
-        prefix = type_prefix_map.get((model.model_type or "").lower())
-        if prefix:
-            out.append(p.parent / f"{prefix}_{exp_id}")
-            # Деякі NB legacy: model_nb_<exp>.pkl → exp_id вже містить "nb_"
-            if exp_id.startswith("nb_"):
-                out.append(p.parent / exp_id)
-
-    # Якщо bundle вказує на model_dir — peek
-    try:
-        import joblib  # lazy: тяжкий
-        if p.exists() and p.is_file():
-            bundle = joblib.load(p)
-            if isinstance(bundle, dict) and "model_dir" in bundle:
-                out.append(Path(bundle["model_dir"]))
-    except Exception:
-        pass
-
-    return out
-
-
-def _model_predictions_path(model: ModelRecord) -> Optional[Path]:
-    for d in _candidate_dirs_for_model(model):
-        for fname in ("predictions.json", f"predictions_{model.id}.json"):
-            cand = d / fname
-            if cand.exists():
-                return cand
-    return None
-
-
-def _llm_predictions_path(model: ModelRecord) -> Optional[Path]:
-    """Для LLM presets predictions лежать у llm_predictions/preset_{id}_*/"""
-    if (model.model_type or "").lower() != "llm":
-        return None
-    root = _models_root() / "llm_predictions"
-    if not root.exists():
-        return None
-    for d in root.glob(f"preset_{model.id}_*"):
-        cand = d / "predictions.json"
-        if cand.exists():
-            return cand
-    return None
-
-
-def _resolve_predictions(model: ModelRecord) -> Optional[Path]:
-    return _model_predictions_path(model) or _llm_predictions_path(model)
+def _has_predictions(model: ModelRecord) -> bool:
+    return bool(model.predictions_json and model.predictions_json.strip())
 
 
 def _load_member(model: ModelRecord) -> dict:
-    preds_path = _resolve_predictions(model)
-    if not preds_path:
+    """Завантажити predictions для члена ансамблю — з БД."""
+    if not _has_predictions(model):
         raise HTTPException(
             status_code=404,
             detail=(
                 f"Predictions not found for model {model.id} ({model.name}). "
-                "Re-train модель після впровадження predictions cache."
+                "Перетренуйте модель — predictions автоматично запишуться у БД."
             ),
         )
     try:
-        data = load_predictions(preds_path)
-    except Exception as e:
-        logger.error(f"Failed to load predictions for model {model.id}: {e}")
+        data = json.loads(model.predictions_json)
+    except json.JSONDecodeError as e:
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to load predictions for {model.name}: {e}",
+            detail=f"Corrupted predictions JSON for {model.name}: {e}",
         )
-    data["model_record_id"] = model.id
-    data["model_name"] = model.name
-    data["model_type_db"] = model.model_type
-    return data
+
+    return {
+        "article_ids": list(data.get("article_ids", [])),
+        "y_true": np.array(data.get("y_true", []), dtype=np.int64),
+        "y_pred": np.array(data.get("y_pred", []), dtype=np.int64),
+        "y_proba_fake": np.array(data.get("y_proba_fake", []), dtype=np.float32),
+        "metrics": {},  # окремо у model.metrics_json
+        "splits_used": data.get("splits_used", model.splits_used or ""),
+        "dataset_id": str(data.get("dataset_id", model.dataset_id or "")),
+        "model_type": data.get("model_type", model.model_type),
+        "test_size": data.get("test_size", len(data.get("article_ids", []))),
+        "model_record_id": model.id,
+        "model_name": model.name,
+        "model_type_db": model.model_type,
+    }
 
 
 def _model_extra_metrics(record: ModelRecord) -> tuple[Optional[float], Optional[float]]:
@@ -158,7 +98,6 @@ def list_eligible_models(
 
     eligible = []
     for m in models:
-        preds_path = _resolve_predictions(m)
         f1_macro, roc_auc = _model_extra_metrics(m)
         eligible.append({
             "id": m.id,
@@ -170,8 +109,8 @@ def list_eligible_models(
             "f1_macro": f1_macro,
             "roc_auc": roc_auc,
             "accuracy": m.accuracy,
-            "has_predictions": preds_path is not None,
-            "predictions_path": str(preds_path) if preds_path else None,
+            "has_predictions": _has_predictions(m),
+            "predictions_path": None,
         })
 
     return {

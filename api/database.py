@@ -129,6 +129,9 @@ class ModelRecord(Base):
     recall = Column(Float, nullable=True)
     f1_score = Column(Float, nullable=True)
     metrics_json = Column(Text, nullable=True)
+    # Compact predictions JSON (article_ids/y_true/y_pred/y_proba_fake) — single
+    # source of truth для ансамблів. Drive predictions.json лишається як backup.
+    predictions_json = Column(Text, nullable=True)
     is_active = Column(Boolean, default=False)
     # Який split-набір використано при тренуванні: NULL = auto/unknown,
     # "in_domain" / "cross_domain" / "mixed" — фіксований split із splits_<name>/.
@@ -184,6 +187,7 @@ def _run_sqlite_migrations():
         ("models", "pipeline_type", "TEXT DEFAULT 'tweet'"),
         ("models", "splits_used", "TEXT"),
         ("models", "dataset_id", "INTEGER"),
+        ("models", "predictions_json", "TEXT"),
     ]
     with engine.begin() as conn:
         for table, column, coltype in migrations:

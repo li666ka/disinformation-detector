@@ -142,7 +142,15 @@ def generate_experiment_id(
     if custom_name and custom_name.strip():
         slug = _slugify(custom_name)
         if slug and slug not in ("default", "default_experiment", "default_exp"):
-            parts = [mt, ts, slug]
+            # Уникнути дублювання model_type prefix: якщо користувач сам додав
+            # "nb_..." → не клеїти ще одне "nb_".
+            mt_prefix = f"{mt}_"
+            if slug.startswith(mt_prefix):
+                slug = slug[len(mt_prefix):]
+            slug = slug.strip("_")
+            parts = [mt, ts]
+            if slug:
+                parts.append(slug)
             if split:
                 parts.append(split)
             return "_".join(parts)

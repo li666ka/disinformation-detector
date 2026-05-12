@@ -505,6 +505,11 @@ def train_nb_article_endpoint(
     data_stats_nba = result.get("data_stats", {}) or {}
     splits_used_nba = data_stats_nba.get("splits_used") or active_ds.active_split
 
+    predictions_compact_nba = result.get("predictions_compact")
+    predictions_json_nba = (
+        json.dumps(predictions_compact_nba) if predictions_compact_nba else None
+    )
+
     record = ModelRecord(
         name=name,
         model_type="nb",
@@ -516,6 +521,7 @@ def train_nb_article_endpoint(
         recall=metrics.get("recall"),
         f1_score=metrics.get("f1_score"),
         metrics_json=json.dumps(metrics),
+        predictions_json=predictions_json_nba,
         splits_used=splits_used_nba,
         dataset_id=active_ds.id,
     )
@@ -806,6 +812,11 @@ def train_aggregated_endpoint(
     data_stats_agg = ml_data.get("data_stats", {}) or {}
     splits_used_agg = data_stats_agg.get("splits_used") or active_ds.active_split
 
+    predictions_compact_agg = ml_data.get("predictions_compact")
+    predictions_json_agg = (
+        json.dumps(predictions_compact_agg) if predictions_compact_agg else None
+    )
+
     record = ModelRecord(
         name=name,
         model_type=request.model_type,
@@ -817,6 +828,7 @@ def train_aggregated_endpoint(
         recall=metrics.get("recall"),
         f1_score=metrics.get("f1_score"),
         metrics_json=json.dumps(metrics),
+        predictions_json=predictions_json_agg,
         splits_used=splits_used_agg,
         dataset_id=active_ds.id,
     )
@@ -1216,6 +1228,10 @@ def train_model(
             data_stats = ml_data.get("data_stats", {}) or {}
             splits_used = data_stats.get("splits_used") or active_ds.active_split
             mr_metrics_json = json.dumps(metrics) if metrics else None
+            predictions_compact = ml_data.get("predictions_compact")
+            predictions_json_str = (
+                json.dumps(predictions_compact) if predictions_compact else None
+            )
             db.add(ModelRecord(
                 experiment_id=exp_id,
                 filename=filename,
@@ -1228,6 +1244,7 @@ def train_model(
                 recall=metrics.get("recall"),
                 f1_score=metrics.get("f1_score"),
                 metrics_json=mr_metrics_json,
+                predictions_json=predictions_json_str,
                 splits_used=splits_used,
                 dataset_id=active_ds.id,
             ))

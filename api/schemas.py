@@ -282,3 +282,84 @@ class PredictRequest(BaseModel):
     models: list[ModelConfig]
     ensemble: Optional[EnsembleConfig] = None
     metadata: Optional[PostMetadata] = None
+
+
+# ── Ensembles ───────────────────────────────────────────────────────────
+VOTING_TYPES = ["hard", "soft", "weighted"]
+
+
+class EnsembleMemberRef(BaseModel):
+    """Reference до моделі-члена ансамблю."""
+    model_id: int
+    weight: Optional[float] = None  # тільки для weighted voting
+
+
+class EnsembleCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=100)
+    voting_type: Literal["hard", "soft", "weighted"]
+    member_model_ids: list[int] = Field(..., min_length=2)
+    weights: Optional[dict[str, float]] = None  # {"model_id_str": weight}
+
+    @field_validator("weights")
+    @classmethod
+    def validate_weights(cls, v, info):
+        voting_type = info.data.get("voting_type")
+        member_ids = info.data.get("member_model_ids", [])
+
+        if voting_type == "weighted":
+            if not v:
+                raise ValueError("Weighted voting requires weights dict")
+
+            for mid in member_ids:
+                if str(mid) not in v:
+                    raise ValueError(f"Missing weight for model_id={mid}")
+
+            if any(w <= 0 for w in v.values()):
+                raise ValueError("All weights must be > 0")
+        else:
+            if v:
+                return None
+
+        return v
+
+
+class EnsembleResponse(BaseModel):
+    id: int
+    name: str
+    voting_type: str
+    member_model_ids: list[int]
+    weights: Optional[dict[str, float]] = None
+
+    # Member details (для UI)
+    member_models: Optional[list[dict]] = None
+
+    accuracy: Optional[float] = None
+    precision: Optional[float] = None
+    recall: Optional[float] = None
+    f1_score: Optional[float] = None
+    f1_macro: Optional[float] = None
+    roc_auc: Optional[float] = None
+
+    confusion_matrix: Optional[dict] = None
+    splits_used: Optional[str] = None
+    dataset_id: Optional[int] = None
+
+    is_active: bool
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class EnsembleSummary(BaseModel):
+    """Compact view для списку ансамблів."""
+    id: int
+    name: str
+    voting_type: str
+    member_count: int
+    accuracy: Optional[float] = None
+    f1_macro: Optional[float] = None
+    splits_used: Optional[str] = None
+    is_active: bool
+    created_at: datetime
+
+    model_config = {"from_attributes": True}

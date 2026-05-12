@@ -1,6 +1,6 @@
 import os
 from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, Boolean, Text, ForeignKey
-from sqlalchemy.orm import DeclarativeBase, sessionmaker
+from sqlalchemy.orm import DeclarativeBase, relationship, sessionmaker
 from datetime import datetime, timezone
 
 BASE_PATH = os.path.join(os.path.dirname(__file__), "..")
@@ -136,6 +136,37 @@ class ModelRecord(Base):
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 
+class Ensemble(Base):
+    """Ансамбль натренованих моделей."""
+    __tablename__ = "ensembles"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    name = Column(String, nullable=False)
+
+    voting_type = Column(String, nullable=False)  # 'hard' | 'soft' | 'weighted'
+    member_model_ids = Column(Text, nullable=False)  # JSON array: [1, 2, 3]
+    weights = Column(Text, nullable=True)  # JSON dict якщо weighted: {"1": 0.5, ...}
+
+    # Metrics (як для звичайних моделей)
+    accuracy = Column(Float, nullable=True)
+    precision = Column(Float, nullable=True)
+    recall = Column(Float, nullable=True)
+    f1_score = Column(Float, nullable=True)
+    f1_macro = Column(Float, nullable=True)
+    roc_auc = Column(Float, nullable=True)
+    metrics_json = Column(Text, nullable=True)  # confusion_matrix, etc.
+
+    splits_used = Column(String, nullable=True)  # 'splits_cross_domain' тощо
+    dataset_id = Column(Integer, ForeignKey("datasets.id"), nullable=True)
+
+    is_active = Column(Boolean, default=False, nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+    user = relationship("User")
+    dataset = relationship("Dataset")
+
+
 def create_tables():
     Base.metadata.create_all(bind=engine)
     _run_sqlite_migrations()
@@ -163,6 +194,35 @@ def _run_sqlite_migrations():
                 conn.exec_driver_sql(
                     f"ALTER TABLE {table} ADD COLUMN {column} {coltype}"
                 )
+
+        # Створити ensembles table якщо не існує
+        conn.exec_driver_sql("""
+            CREATE TABLE IF NOT EXISTS ensembles (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                name TEXT NOT NULL,
+                voting_type TEXT NOT NULL,
+                member_model_ids TEXT NOT NULL,
+                weights TEXT,
+                accuracy REAL,
+                precision REAL,
+                recall REAL,
+                f1_score REAL,
+                f1_macro REAL,
+                roc_auc REAL,
+                metrics_json TEXT,
+                splits_used TEXT,
+                dataset_id INTEGER,
+                is_active BOOLEAN DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(id),
+                FOREIGN KEY (dataset_id) REFERENCES datasets(id)
+            )
+        """)
+        conn.exec_driver_sql("""
+            CREATE INDEX IF NOT EXISTS idx_ensembles_user
+            ON ensembles(user_id, is_active)
+        """)
 
 
 def get_db():

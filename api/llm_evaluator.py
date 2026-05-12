@@ -227,6 +227,11 @@ def evaluate_llm_preset(
 
     y_pred_arr = np.array(y_pred)
     conf_arr = np.array(confidences)
+    article_ids_arr = (
+        test_df["article_id"].astype(str).values
+        if "article_id" in test_df.columns
+        else np.array([str(i) for i in range(len(y_pred_arr))])
+    )
 
     # ── Filter ERROR predictions з metrics ──
     valid_mask = y_pred_arr >= 0
@@ -237,6 +242,7 @@ def evaluate_llm_preset(
     y_pred_clean = y_pred_arr[valid_mask]
     y_true_clean = y_true[valid_mask]
     conf_clean = conf_arr[valid_mask]
+    article_ids_clean = article_ids_arr[valid_mask]
 
     if len(y_true_clean) == 0:
         raise RuntimeError("All LLM predictions failed")
@@ -294,5 +300,37 @@ def evaluate_llm_preset(
         f"roc_auc={metrics['roc_auc']}, "
         f"time={metrics['evaluation_time']}s"
     )
+
+    # Save predictions для подальшого використання в ансамблях
+    try:
+        import os as _os
+
+        from ml_server.predictions_cache import save_predictions  # type: ignore
+
+        llm_preds_root = Path(_os.environ.get("MODELS_ROOT", "models")) / "llm_predictions"
+        preset_id = preset_config.get("preset_id", "unknown")
+        mode = preset_config.get("mode", "unknown")
+        base_model = str(preset_config.get("base_model", "unknown")).replace("-", "_")
+        include_soc = "soc" if preset_config.get("include_social_context") else "text"
+
+        preds_dir = (
+            llm_preds_root
+            / f"preset_{preset_id}_{base_model}_{mode}_{include_soc}_{splits_subdir}"
+        )
+        preds_dir.mkdir(parents=True, exist_ok=True)
+
+        save_predictions(
+            model_dir=preds_dir,
+            article_ids=article_ids_clean.tolist(),
+            y_true=y_true_clean,
+            y_pred=y_pred_clean,
+            y_proba_fake=conf_clean,
+            metrics=metrics,
+            model_type="llm",
+            splits_used=splits_subdir,
+            dataset_id=dataset_id,
+        )
+    except Exception as e:
+        logger.warning(f"Failed to save LLM predictions: {e}")
 
     return metrics

@@ -815,3 +815,85 @@ export interface PostDetailsResponse {
   stats?: PostDetailsStats;
   fetched_limits?: PostDetailsFetchedLimits;
 }
+
+// ── Ensembles ──────────────────────────────────────────────────────────
+
+export type VotingType = "hard" | "soft" | "weighted";
+
+export interface EligibleModel {
+  id: number;
+  name: string;
+  model_type: string;          // "nb" | "distilbert" | "gin" | "sage" | "llm"
+  splits_used: string | null;
+  dataset_id: number | null;
+  f1_score: number | null;
+  f1_macro: number | null;
+  roc_auc: number | null;
+  accuracy: number | null;
+  has_predictions: boolean;
+  predictions_path: string | null;
+}
+
+export interface EligibleModelsResponse {
+  models: EligibleModel[];
+  total: number;
+  with_predictions: number;
+}
+
+export interface EnsembleMemberInfo {
+  id: number;
+  name: string;
+  model_type: string;
+  f1_score: number | null;
+  f1_macro: number | null;
+  accuracy: number | null;
+  weight: number | null;
+}
+
+export interface ConfusionMatrix {
+  tn: number;
+  fp: number;
+  fn: number;
+  tp: number;
+}
+
+export interface EnsembleSummary {
+  id: number;
+  name: string;
+  voting_type: VotingType;
+  member_count: number;
+  accuracy: number | null;
+  f1_macro: number | null;
+  splits_used: string | null;
+  is_active: boolean;
+  created_at: string;
+}
+
+export interface Ensemble {
+  id: number;
+  name: string;
+  voting_type: VotingType;
+  member_model_ids: number[];
+  weights: Record<string, number> | null;
+  member_models: EnsembleMemberInfo[] | null;
+
+  accuracy: number | null;
+  precision: number | null;
+  recall: number | null;
+  f1_score: number | null;
+  f1_macro: number | null;
+  roc_auc: number | null;
+  confusion_matrix: ConfusionMatrix | null;
+
+  splits_used: string | null;
+  dataset_id: number | null;
+  is_active: boolean;
+  created_at: string;
+}
+
+export interface CreateEnsembleRequest {
+  name: string;
+  voting_type: VotingType;
+  member_model_ids: number[];
+  weights?: Record<string, number>;
+}

@@ -7,6 +7,7 @@ import AnalysisPage from "./AnalysisPage";
 import SourcesPage from "./SourcesPage";
 import DatasetsPage from "./DatasetsPage";
 import LLMPresetsPage from "./LLMPresetsPage";
+import EnsemblesPage from "./EnsemblesPage";
 import VerificationPage from "./VerificationPage";
 import api from "./api";
 import { useTheme } from "./ThemeProvider";
@@ -67,6 +68,7 @@ const NAV_ITEMS = [
   { icon: Brain, label: "Навчання моделі", tab: "training" },
   { icon: Boxes, label: "Моделі", tab: "models" },
   { icon: Sparkles, label: "LLM пресети", tab: "llm-presets" },
+  { icon: Layers, label: "Ансамблі", tab: "ensembles" },
   { icon: FileText, label: "Аналіз тексту", tab: "prediction" },
   { icon: ShieldCheck, label: "Верифікація", tab: "verification" },
   { icon: Globe, label: "Реальні дані", tab: "sources" },
@@ -365,9 +367,9 @@ function App() {
             // ML server їх ігнорує — clutter).
             ...(useText
               ? {
-                  vectorizer_type: cfg.vectorizer || cfg.vectorizer_type || "tfidf",
-                  ngram_range: cfg.ngram_range || cfg.ngram || "1,2",
-                }
+                vectorizer_type: cfg.vectorizer || cfg.vectorizer_type || "tfidf",
+                ngram_range: cfg.ngram_range || cfg.ngram || "1,2",
+              }
               : {}),
           },
         };
@@ -500,25 +502,6 @@ function App() {
                   <CardDescription>Оберіть режим, алгоритм та параметри</CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-6">
-                  {/* Aggregated pipeline info card */}
-                  {(() => {
-                    const mtype = wizardConfig?.models?.[0]?.model;
-                    const supported = mtype === "nb";
-                    if (!supported) return null;
-                    return (
-                      <div className="rounded-md border bg-muted/30 p-3 space-y-1">
-                        <div className="flex items-center gap-2 text-sm font-medium">
-                          <Layers className="h-4 w-4" />
-                          Aggregated pipeline
-                        </div>
-                        <p className="text-xs text-muted-foreground">
-                          1 представницький твіт + 8 соц.агрегатів (підписники, верифікація,
-                          вік акаунтів, реакції) + текст статті. 1 приклад на статтю.
-                        </p>
-                      </div>
-                    );
-                  })()}
-
                   <ClassificationWizard
                     trainingMode
                     onConfigChange={setWizardConfig}
@@ -854,6 +837,7 @@ function App() {
           {activeTab === "sources" && <SourcesPage />}
           {activeTab === "datasets" && <DatasetsPage />}
           {activeTab === "llm-presets" && <LLMPresetsPage />}
+          {activeTab === "ensembles" && <EnsemblesPage />}
           {activeTab === "models" && <ModelsPage />}
         </div>
       </main>

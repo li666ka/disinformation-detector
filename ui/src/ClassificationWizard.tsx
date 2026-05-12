@@ -7,7 +7,7 @@ import { Badge } from "./components/ui/badge";
 import { Checkbox } from "./components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./components/ui/select";
 import { Label } from "./components/ui/label";
-import { Check, ChevronLeft, ChevronRight, Users, User as UserIcon, Info } from "lucide-react";
+import { Check, ChevronLeft, ChevronRight, Info } from "lucide-react";
 import type { Dataset, FeatureGroupDef } from "./types";
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -133,12 +133,6 @@ const MODEL_LABELS: Record<string, string> = {
   sage: "GraphSAGE",
 };
 
-const ENSEMBLE_STRATEGIES = [
-  { id: "hard", name: "Hard Voting", desc: "Більшість голосів (majority label)" },
-  { id: "soft", name: "Soft Voting", desc: "Середнє ймовірностей моделей" },
-  { id: "weighted", name: "Weighted Voting", desc: "Зважена сума (ваги задаються вручну)" },
-];
-
 function buildDefaultMask(allTrue: boolean, forceGroups: string[] = []) {
   const mask: Record<string, boolean> = {};
   ALL_FEATURE_KEYS.forEach((k) => { mask[k] = allTrue; });
@@ -198,13 +192,12 @@ type ClassificationWizardProps = {
 };
 
 export default function ClassificationWizard({ trainingMode = false, onConfigChange }: ClassificationWizardProps) {
-  const [mode, setMode] = useState<any>(null);
+  // Ансамблі тепер живуть на окремій сторінці /ensembles — у тренувальному
+  // wizard'і завжди single-model режим.
+  const mode = "single" as const;
   const [step, setStep] = useState<number>(0);
   const [selectedModel, setSelectedModel] = useState<string>("nb");
-  const [selectedModels, setSelectedModels] = useState<any[]>([]);
   const [modelParams, setModelParams] = useState<any>({});
-  const [ensembleStrategy, setEnsembleStrategy] = useState<string>("hard");
-  const [weights, setWeights] = useState<any>({});
   const [activeDataset, setActiveDataset] = useState<Dataset | null>(null);
 
   useEffect(() => {
@@ -215,13 +208,9 @@ export default function ClassificationWizard({ trainingMode = false, onConfigCha
       .catch(() => setActiveDataset(null));
   }, [trainingMode]);
 
-  const STEPS: any = {
-    single: ["Режим", "Модель", "Параметри", "Підсумок"],
-    ensemble: ["Режим", "Стратегія", "Моделі", "Параметри", "Підсумок"],
-  };
-  const stepLabels = STEPS[mode] || STEPS.single;
+  const stepLabels = ["Модель", "Параметри", "Підсумок"];
   const lastStep = stepLabels.length - 1;
-  const isLastStep = mode !== null && step === lastStep;
+  const isLastStep = step === lastStep;
 
   const setParam = (type: string, key: string, val: any) =>
     setModelParams((prev: any) => ({ ...prev, [type]: { ...prev[type], [key]: val } }));
@@ -277,34 +266,18 @@ export default function ClassificationWizard({ trainingMode = false, onConfigCha
       return { ...prev, [type]: { ...prev[type], preprocessing: updated } };
     });
 
-  const toggleModel = (id: string) =>
-    setSelectedModels((prev: any[]) => prev.includes(id) ? prev.filter((m) => m !== id) : [...prev, id]);
-
   const canNext = () => {
-    if (step === 0) return mode !== null;
-    if (mode === "single") { if (step === 1) return !!selectedModel; return true; }
-    if (step === 1) return !!ensembleStrategy;
-    if (step === 2) return selectedModels.length >= 2;
+    if (step === 0) return !!selectedModel;
     return true;
   };
 
   const handleNext = () => {
     if (!canNext()) return;
-    const paramsStep = mode === "single" ? 1 : 2;
-    if (step === paramsStep) {
-      const models = mode === "single" ? [selectedModel] : selectedModels;
-      setModelParams((prev: any) => {
-        const updates: any = {};
-        models.forEach((t: string) => { if (!prev[t]) updates[t] = getDefaultParams(t); });
-        return Object.keys(updates).length ? { ...prev, ...updates } : prev;
-      });
-      if (mode === "ensemble") {
-        setWeights((prev: any) => {
-          const next: any = {};
-          selectedModels.forEach((m: string) => { next[m] = prev[m] !== undefined ? prev[m] : 1; });
-          return next;
-        });
-      }
+    // Перед переходом з кроку "Модель" → ініціалізуємо params для вибраної моделі.
+    if (step === 0) {
+      setModelParams((prev: any) => (
+        prev[selectedModel] ? prev : { ...prev, [selectedModel]: getDefaultParams(selectedModel) }
+      ));
     }
     setStep((s) => s + 1);
   };
@@ -312,7 +285,7 @@ export default function ClassificationWizard({ trainingMode = false, onConfigCha
   const handleBack = () => setStep((s) => s - 1);
 
   const buildRequest = () => {
-    const modelTypes = mode === "single" ? [selectedModel] : selectedModels;
+    const modelTypes = [selectedModel];
     const models = modelTypes.map((type: string) => {
       const p = modelParams[type] || getDefaultParams(type);
       const isGNN = type === "gin" || type === "sage";
@@ -357,54 +330,17 @@ export default function ClassificationWizard({ trainingMode = false, onConfigCha
     const firstModel = modelTypes[0];
     const preprocessing = firstModel === "nb" ? nbParams.preprocessing : { removeUrls: true, removeMentions: true, cleaning: true };
     const req: any = { mode, models, preprocessing };
-    if (mode === "ensemble") {
-      req.ensemble = { strategy: ensembleStrategy };
-      if (ensembleStrategy === "weighted") {
-        const total = (Object.values(weights).reduce((s: number, v: any) => s + Number(v), 0) as number) || 1;
-        const normWeights: any = {};
-        selectedModels.forEach((m: string) => { normWeights[m] = (weights[m] || 0) / total; });
-        req.ensemble.weights = normWeights;
-      }
-    }
     return req;
   };
 
   React.useEffect(() => {
-    if (!trainingMode || !onConfigChange || !mode) return;
+    if (!trainingMode || !onConfigChange) return;
     const config = buildRequest();
     onConfigChange(config);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [trainingMode, mode, selectedModel, selectedModels, modelParams, ensembleStrategy, weights]);
+  }, [trainingMode, selectedModel, modelParams]);
 
   // ── Step renderers ─────────────────────────────────────────────────────
-
-  const renderModeSelect = () => (
-    <div className="space-y-4">
-      <p className="font-medium">Оберіть режим класифікації</p>
-      <div className="grid grid-cols-2 gap-4">
-        {[
-          { id: "single", icon: UserIcon, title: "Одна модель", desc: "Обрати один алгоритм та налаштувати його параметри" },
-          { id: "ensemble", icon: Users, title: "Ансамбль", desc: "Два або більше алгоритмів — голосування або зважена сума" },
-        ].map((m) => {
-          const Icon = m.icon;
-          return (
-            <Card
-              key={m.id}
-              className={cn("cursor-pointer transition-all hover:shadow-md", mode === m.id && "ring-2 ring-primary")}
-              onClick={() => setMode(m.id)}
-            >
-              <CardContent className="p-6 text-center">
-                <Icon className={cn("h-8 w-8 mx-auto mb-3", mode === m.id ? "text-primary" : "text-muted-foreground")} />
-                <p className="font-semibold text-sm">{m.title}</p>
-                <p className="text-xs text-muted-foreground mt-1">{m.desc}</p>
-              </CardContent>
-            </Card>
-          );
-        })}
-      </div>
-      {!mode && <p className="text-sm text-muted-foreground">Клікніть на картку щоб обрати режим</p>}
-    </div>
-  );
 
   const renderSingleModelSelect = () => (
     <div className="space-y-3">
@@ -431,35 +367,6 @@ export default function ClassificationWizard({ trainingMode = false, onConfigCha
           </Card>
         ))}
       </div>
-    </div>
-  );
-
-  const renderEnsembleModelSelect = () => (
-    <div className="space-y-3">
-      <p className="text-sm text-muted-foreground">Оберіть мінімум 2 моделі для ансамблю</p>
-      <div className="space-y-2">
-        {MODEL_OPTIONS.map((m) => {
-          const checked = selectedModels.includes(m.id);
-          return (
-            <Card
-              key={m.id}
-              className={cn("cursor-pointer transition-all", checked && "ring-2 ring-primary")}
-              onClick={() => toggleModel(m.id)}
-            >
-              <CardContent className="p-4 flex items-center gap-3">
-                <Checkbox checked={checked} onCheckedChange={() => toggleModel(m.id)} />
-                <div>
-                  <p className="font-medium text-sm">{m.name}</p>
-                  <p className="text-xs text-muted-foreground">{m.desc}</p>
-                </div>
-              </CardContent>
-            </Card>
-          );
-        })}
-      </div>
-      {selectedModels.length === 1 && (
-        <p className="text-sm text-destructive">Оберіть ще хоча б одну модель</p>
-      )}
     </div>
   );
 
@@ -674,81 +581,15 @@ export default function ClassificationWizard({ trainingMode = false, onConfigCha
     }
   };
 
-  const renderParamsStep = () => {
-    const models = mode === "single" ? [selectedModel] : selectedModels;
-    if (models.length === 1) {
-      return (
-        <div className="space-y-3">
-          <p className="font-medium">Параметри {MODEL_LABELS[models[0]] || models[0]}</p>
-          {renderModelParams(models[0])}
-        </div>
-      );
-    }
-    return (
-      <div className="space-y-4">
-        <p className="text-sm text-muted-foreground">Налаштуйте параметри кожної моделі</p>
-        {models.map((type: string) => (
-          <details key={type} open className="group">
-            <summary className="flex items-center gap-2 p-3 bg-muted rounded-lg cursor-pointer font-medium text-sm">
-              {MODEL_LABELS[type] || type}
-            </summary>
-            <div className="pt-4 pl-2">{renderModelParams(type)}</div>
-          </details>
-        ))}
-      </div>
-    );
-  };
-
-  const renderEnsembleStrategy = () => {
-    const total = Object.values(weights).reduce((s: number, v: any) => s + Number(v), 0) as number;
-    return (
-      <div className="space-y-4">
-        <p className="text-sm text-muted-foreground">Оберіть стратегію об'єднання прогнозів</p>
-        <div className="grid grid-cols-2 gap-3">
-          {ENSEMBLE_STRATEGIES.map((s: any) => (
-            <Card
-              key={s.id}
-              className={cn("cursor-pointer transition-all", ensembleStrategy === s.id && "ring-2 ring-primary")}
-              onClick={() => setEnsembleStrategy(s.id)}
-            >
-              <CardContent className="p-4">
-                <p className="font-medium text-sm">{s.name}</p>
-                <p className="text-xs text-muted-foreground mt-1">{s.desc}</p>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
-        {ensembleStrategy === "weighted" && (
-          <div className="space-y-4 mt-4">
-            <p className="font-medium text-sm">Ваги моделей</p>
-            <p className="text-xs text-muted-foreground">Автоматично нормалізуються до суми 1.0</p>
-            {selectedModels.map((mid: string) => {
-              const norm = total > 0 ? Number(weights[mid] || 0) / total : 0;
-              return (
-                <div key={mid} className="space-y-1">
-                  <div className="flex justify-between text-sm">
-                    <span className="font-medium">{MODEL_LABELS[mid]}</span>
-                    <span className="text-primary font-semibold">{norm.toFixed(2)}</span>
-                  </div>
-                  <input
-                    type="range" min="0" max="10" step="0.5"
-                    value={weights[mid] || 0}
-                    onChange={(e) => setWeights((p: any) => ({ ...p, [mid]: parseFloat(e.target.value) }))}
-                    className="w-full accent-primary"
-                  />
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
-    );
-  };
+  const renderParamsStep = () => (
+    <div className="space-y-3">
+      <p className="font-medium">Параметри {MODEL_LABELS[selectedModel] || selectedModel}</p>
+      {renderModelParams(selectedModel)}
+    </div>
+  );
 
   const renderConfigSummary = () => {
-    const modelIds = mode === "single" ? [selectedModel] : selectedModels;
-    const strategyObj = ENSEMBLE_STRATEGIES.find((s: any) => s.id === ensembleStrategy);
-    const total = (Object.values(weights).reduce((s: number, v: any) => s + Number(v), 0) as number) || 1;
+    const modelIds = [selectedModel];
 
     return (
       <Card>
@@ -775,11 +616,6 @@ export default function ClassificationWizard({ trainingMode = false, onConfigCha
             </div>
           )}
 
-          <p><span className="font-medium">Режим:</span> {mode === "single" ? "Одна модель" : "Ансамбль"}</p>
-          {mode === "ensemble" && <p><span className="font-medium">Стратегія:</span> {strategyObj?.name}</p>}
-          {mode === "ensemble" && ensembleStrategy === "weighted" && (
-            <p><span className="font-medium">Ваги:</span> {modelIds.map((m: string) => `${MODEL_LABELS[m]} ${(Number(weights[m] || 0) / total).toFixed(2)}`).join(", ")}</p>
-          )}
           {modelIds.map((mid: string) => {
             const p = modelParams[mid] || getDefaultParams(mid);
             const groups = p.additional_groups || [];
@@ -840,7 +676,7 @@ export default function ClassificationWizard({ trainingMode = false, onConfigCha
             );
           })}
           <div className="pt-2 text-right">
-            <Button variant="outline" size="sm" onClick={() => setStep(mode === "single" ? 2 : 3)}>Змінити</Button>
+            <Button variant="outline" size="sm" onClick={() => setStep(1)}>Змінити</Button>
           </div>
         </CardContent>
       </Card>
@@ -848,54 +684,44 @@ export default function ClassificationWizard({ trainingMode = false, onConfigCha
   };
 
   const renderCurrentStep = () => {
-    if (step === 0) return renderModeSelect();
-    if (mode === "single") {
-      if (step === 1) return renderSingleModelSelect();
-      if (step === 2) return renderParamsStep();
-      if (step === 3) return renderConfigSummary();
-      return null;
-    }
-    if (step === 1) return renderEnsembleStrategy();
-    if (step === 2) return renderEnsembleModelSelect();
-    if (step === 3) return renderParamsStep();
-    if (step === 4) return renderConfigSummary();
+    if (step === 0) return renderSingleModelSelect();
+    if (step === 1) return renderParamsStep();
+    if (step === 2) return renderConfigSummary();
     return null;
   };
 
   return (
     <div className="max-w-3xl mx-auto">
       {/* Step indicator */}
-      {mode !== null && (
-        <div className="flex items-center mb-6">
-          {stepLabels.map((label: string, i: number) => {
-            const state = i < step ? "done" : i === step ? "active" : "pending";
-            return (
-              <React.Fragment key={i}>
-                <div className="flex flex-col items-center flex-1">
-                  <div className={cn(
-                    "w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold shrink-0",
-                    state === "done" && "bg-green-500 text-white",
-                    state === "active" && "bg-primary text-primary-foreground",
-                    state === "pending" && "bg-muted text-muted-foreground",
-                  )}>
-                    {state === "done" ? <Check className="h-4 w-4" /> : i + 1}
-                  </div>
-                  <span className={cn(
-                    "text-[10px] mt-1",
-                    state === "active" ? "text-primary font-semibold" : "text-muted-foreground",
-                    state === "pending" && "opacity-40",
-                  )}>
-                    {label}
-                  </span>
+      <div className="flex items-center mb-6">
+        {stepLabels.map((label: string, i: number) => {
+          const state = i < step ? "done" : i === step ? "active" : "pending";
+          return (
+            <React.Fragment key={i}>
+              <div className="flex flex-col items-center flex-1">
+                <div className={cn(
+                  "w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold shrink-0",
+                  state === "done" && "bg-green-500 text-white",
+                  state === "active" && "bg-primary text-primary-foreground",
+                  state === "pending" && "bg-muted text-muted-foreground",
+                )}>
+                  {state === "done" ? <Check className="h-4 w-4" /> : i + 1}
                 </div>
-                {i < stepLabels.length - 1 && (
-                  <div className={cn("h-0.5 flex-1 -mt-4", i < step ? "bg-green-500" : "bg-muted")} />
-                )}
-              </React.Fragment>
-            );
-          })}
-        </div>
-      )}
+                <span className={cn(
+                  "text-[10px] mt-1",
+                  state === "active" ? "text-primary font-semibold" : "text-muted-foreground",
+                  state === "pending" && "opacity-40",
+                )}>
+                  {label}
+                </span>
+              </div>
+              {i < stepLabels.length - 1 && (
+                <div className={cn("h-0.5 flex-1 -mt-4", i < step ? "bg-green-500" : "bg-muted")} />
+              )}
+            </React.Fragment>
+          );
+        })}
+      </div>
 
       {/* Current step content */}
       <div className="mb-4">{renderCurrentStep()}</div>

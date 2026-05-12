@@ -82,11 +82,8 @@ export default function VerificationPage({ initialText = "" }: VerificationPageP
         <div className="space-y-6">
             {/* Header */}
             <div>
-                <h2 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-                    <ShieldCheck className="h-6 w-6 text-primary" />
-                    Верифікація твердження
-                </h2>
-                <p className="text-muted-foreground mt-1">
+                <h2 className="text-2xl font-bold tracking-tight">Верифікація твердження</h2>
+                <p className="text-muted-foreground">
                     Multi-hop pipeline: витягування твердження → пошук evidence → stance → вердикт
                 </p>
             </div>

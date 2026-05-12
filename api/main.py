@@ -28,6 +28,7 @@ from api.routers import llm_presets as llm_presets_router
 from api.routers import datasets as datasets_router
 from api.routers import verification as verification_router
 from api.routers import analytics as analytics_router
+from api.routers import ensembles as ensembles_router
 
 from api.text_preprocessing import preprocess_for_bayes, preprocess_for_transformer
 from api.fact_check import verify_post
@@ -70,6 +71,7 @@ app.include_router(datasets_router.router)
 app.include_router(llm_presets_router.router)
 app.include_router(verification_router.router)
 app.include_router(analytics_router.router)
+app.include_router(ensembles_router.router)
 
 FEATURE_GROUP_KEYS: dict[str, list[str]] = {
     "emotional": [
@@ -708,9 +710,18 @@ def train_aggregated_endpoint(
     else:
         model_params = {}
 
+    from api.utils.experiment_naming import generate_experiment_id
+    agg_experiment_id = "agg_" + generate_experiment_id(
+        model_type=request.model_type,
+        model_params=model_params,
+        splits_subdir=None,  # aggregated не має splits
+        custom_name=request.model_name,
+    )
+    logger.info(f"Aggregated experiment_id: {agg_experiment_id}")
+
     payload = {
         "user_id": current_user.id,
-        "experiment_id": "aggregated",
+        "experiment_id": agg_experiment_id,
         "model_type": request.model_type,
         "model_params": model_params,
         "use_text": request.use_text,
@@ -1020,9 +1031,24 @@ def train_model(
     # 6. Simple payload — no CSV data
     splits_subdir = f"splits_{active_ds.active_split}" if active_ds.active_split else None
 
+    # Auto-generate informative experiment_id якщо клієнт прислав default/empty.
+    from api.utils.experiment_naming import (
+        generate_experiment_id,
+        is_default_experiment_id,
+    )
+    experiment_id = request.experiment_id
+    if is_default_experiment_id(experiment_id):
+        experiment_id = generate_experiment_id(
+            model_type=actual_model_type,
+            model_params=model_params,
+            splits_subdir=splits_subdir,
+            custom_name=request.model_name,
+        )
+        logger.info(f"Auto-generated experiment_id: {experiment_id}")
+
     payload = {
         "user_id": current_user.id,
-        "experiment_id": request.experiment_id or "default_exp",
+        "experiment_id": experiment_id,
         "model_type": actual_model_type,
         "model_params": model_params,
         "preprocessing": request.preprocessing or {},
@@ -1142,9 +1168,9 @@ def train_model(
         traceback.print_exc()
         raise
 
-    # Save experiment to DB
+    # Save experiment to DB — use the same auto-generated id як payload.
     metrics = ml_data.get("metrics", {})
-    exp_id = request.experiment_id or "default_exp"
+    exp_id = experiment_id
     # Ensure unique experiment_id (append suffix if collision)
     base_exp_id = exp_id
     counter = 0

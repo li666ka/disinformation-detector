@@ -3,7 +3,13 @@ import React, { useEffect, useMemo, useState } from "react";
 import api from "./api";
 import { cn } from "./lib/utils";
 import { Button } from "./components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "./components/ui/card";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "./components/ui/card";
 import { Textarea } from "./components/ui/textarea";
 import { Badge } from "./components/ui/badge";
 import {
@@ -134,7 +140,7 @@ export default function AnalysisPage({ onDeepCheckRequest }: AnalysisPageProps =
   const isUncertain = result?.label === "UNCERTAIN";
 
   return (
-    <div className="space-y-6 max-w-2xl mx-auto">
+    <div className="space-y-6">
       <div>
         <h2 className="text-2xl font-bold tracking-tight">Аналіз тексту</h2>
         <p className="text-muted-foreground">
@@ -145,7 +151,10 @@ export default function AnalysisPage({ onDeepCheckRequest }: AnalysisPageProps =
       {/* Model Selection */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Модель</CardTitle>
+          <CardTitle className="text-lg">Модель</CardTitle>
+          <CardDescription>
+            Оберіть натреновану модель або LLM-пресет для класифікації
+          </CardDescription>
         </CardHeader>
         <CardContent>
           {loadingModels ? (
@@ -245,7 +254,10 @@ export default function AnalysisPage({ onDeepCheckRequest }: AnalysisPageProps =
       {/* Text Input */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Текст для аналізу</CardTitle>
+          <CardTitle className="text-lg">Текст для аналізу</CardTitle>
+          <CardDescription>
+            Вставте текст новини, посту або заголовок — модель оцінить ймовірність дезінформації
+          </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <Textarea
@@ -324,8 +336,8 @@ export default function AnalysisPage({ onDeepCheckRequest }: AnalysisPageProps =
           {!isUncertain && result.reason && (
             <Card>
               <CardHeader>
-                <CardTitle className="text-sm flex items-center gap-2">
-                  <Sparkles className="h-4 w-4" />
+                <CardTitle className="text-lg flex items-center gap-2">
+                  <Sparkles className="h-5 w-5" />
                   Обґрунтування моделі
                 </CardTitle>
               </CardHeader>
@@ -372,7 +384,10 @@ export default function AnalysisPage({ onDeepCheckRequest }: AnalysisPageProps =
 
           {/* Details */}
           <Card>
-            <CardContent className="p-4">
+            <CardHeader>
+              <CardTitle className="text-lg">Деталі</CardTitle>
+            </CardHeader>
+            <CardContent>
               <ul className="space-y-1.5 text-sm">
                 <li className="flex justify-between py-1 border-b border-border">
                   <span className="font-medium">Модель</span>

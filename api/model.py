@@ -2,11 +2,45 @@
 import os
 import math
 import logging
+from pathlib import Path
 
 import joblib
 import numpy as np
 
 logger = logging.getLogger(__name__)
+
+
+def _resolve_legacy_nb_path(path: str) -> str:
+    """Backward-compat: старі шляхи user_X/model_<exp>.pkl були перенесені
+    у підпапки user_X/nb_<exp>/model.pkl.  Якщо переданий шлях не існує —
+    спробувати знайти у новій структурі.
+    """
+    if not path:
+        return path
+    if os.path.exists(path):
+        return path
+
+    p = Path(path)
+    if p.suffix != ".pkl" or not p.name.startswith("model_"):
+        return path
+
+    # model_<exp>.pkl  → nb_<exp>/model.pkl
+    # model_nb_<exp>.pkl → nb_<exp>/model.pkl (legacy NB прапор)
+    stem_id = p.stem[len("model_"):]
+    candidates = []
+    if stem_id.startswith("nb_aggregated_"):
+        candidates.append(p.parent / stem_id / "model.pkl")
+    if stem_id.startswith("nb_"):
+        candidates.append(p.parent / stem_id / "model.pkl")
+        candidates.append(p.parent / stem_id[3:] / "model.pkl")  # без nb_ префіксу
+    candidates.append(p.parent / f"nb_{stem_id}" / "model.pkl")
+    candidates.append(p.parent / stem_id / "model.pkl")
+
+    for cand in candidates:
+        if cand.exists():
+            logger.info(f"Resolved legacy NB path {path} → {cand}")
+            return str(cand)
+    return path
 
 
 class FakeNewsModel:
@@ -19,14 +53,16 @@ class FakeNewsModel:
     def __init__(self, model_path: str | None = None):
         self.pipeline = None       # sklearn Pipeline (simple model)
         self._model_dict = None    # dict format: {vectorizer, classifier, has_social}
-        self._model_path = model_path
-        if model_path and os.path.exists(model_path):
-            self.load_from_file(model_path)
+        resolved = _resolve_legacy_nb_path(model_path) if model_path else None
+        self._model_path = resolved
+        if resolved and os.path.exists(resolved):
+            self.load_from_file(resolved)
         else:
             logger.info("No trained model loaded. Using stub for predictions.")
 
     def load_from_file(self, path: str) -> None:
         """Завантажити модель з .pkl файлу."""
+        path = _resolve_legacy_nb_path(path)
         if not path or not os.path.exists(path):
             raise FileNotFoundError(f"Model file not found: {path}")
 

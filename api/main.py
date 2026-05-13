@@ -498,9 +498,13 @@ def train_nb_article_endpoint(
         request.model_name
         or f"Article-NB · ds{active_ds.id} · {datetime.now(timezone.utc).strftime('%m%d-%H%M')}"
     )
-    filename = os.path.basename(model_dir) if model_dir else None
-    if filename and db.query(ModelRecord).filter(ModelRecord.filename == filename).first():
-        filename = f"{filename}_{int(datetime.now(timezone.utc).timestamp())}"
+    base_filename = os.path.basename(model_dir) if model_dir else None
+    if base_filename:
+        filename = base_filename
+        if db.query(ModelRecord).filter(ModelRecord.filename == filename).first():
+            filename = f"{filename}_{int(datetime.now(timezone.utc).timestamp())}"
+    else:
+        filename = f"nb_article_{int(datetime.now(timezone.utc).timestamp())}"
 
     data_stats_nba = result.get("data_stats", {}) or {}
     splits_used_nba = data_stats_nba.get("splits_used") or active_ds.active_split
@@ -805,9 +809,13 @@ def train_aggregated_endpoint(
         request.model_name
         or f"Aggregated-{request.model_type.upper()} · ds{active_ds.id} · {datetime.now(timezone.utc).strftime('%m%d-%H%M')}"
     )
-    filename = os.path.basename(model_path) if model_path else None
-    if filename and db.query(ModelRecord).filter(ModelRecord.filename == filename).first():
-        filename = f"{filename}_{int(datetime.now(timezone.utc).timestamp())}"
+    base_filename = os.path.basename(model_path) if model_path else None
+    if base_filename:
+        filename = base_filename
+        if db.query(ModelRecord).filter(ModelRecord.filename == filename).first():
+            filename = f"{filename}_{int(datetime.now(timezone.utc).timestamp())}"
+    else:
+        filename = f"agg_{request.model_type}_{int(datetime.now(timezone.utc).timestamp())}"
 
     data_stats_agg = ml_data.get("data_stats", {}) or {}
     splits_used_agg = data_stats_agg.get("splits_used") or active_ds.active_split
@@ -1223,31 +1231,48 @@ def train_model(
     # Register model file
     model_file = ml_data.get("path")
     if model_file:
-        filename = os.path.basename(model_file)
-        if not db.query(ModelRecord).filter(ModelRecord.filename == filename).first():
-            data_stats = ml_data.get("data_stats", {}) or {}
-            splits_used = data_stats.get("splits_used") or active_ds.active_split
-            mr_metrics_json = json.dumps(metrics) if metrics else None
-            predictions_compact = ml_data.get("predictions_compact")
-            predictions_json_str = (
-                json.dumps(predictions_compact) if predictions_compact else None
-            )
-            db.add(ModelRecord(
-                experiment_id=exp_id,
-                filename=filename,
-                name=request.model_name or None,
-                model_path=model_file,
-                model_type=stored_model_type,
-                pipeline_type=stored_pipeline_type,
-                accuracy=metrics.get("accuracy"),
-                precision=metrics.get("precision"),
-                recall=metrics.get("recall"),
-                f1_score=metrics.get("f1_score"),
-                metrics_json=mr_metrics_json,
-                predictions_json=predictions_json_str,
-                splits_used=splits_used,
-                dataset_id=active_ds.id,
-            ))
+        # Унифікована структура: всі моделі — у підпапках з ім'ям "model.pkl",
+        # тож basename більше не унікальний. Завжди префіксуємо experiment_id.
+        base_filename = os.path.basename(model_file)
+        filename = f"{exp_id}_{base_filename}"
+
+        # Safety net на випадок неймовірної колізії exp_id_<basename>.
+        if db.query(ModelRecord).filter(ModelRecord.filename == filename).first():
+            import time as _time
+            collided = filename
+            filename = f"{filename}_{int(_time.time())}"
+            logger.warning(f"Filename collision: {collided} → {filename}")
+
+        data_stats = ml_data.get("data_stats", {}) or {}
+        splits_used = data_stats.get("splits_used") or active_ds.active_split
+        mr_metrics_json = json.dumps(metrics) if metrics else None
+        predictions_compact = ml_data.get("predictions_compact")
+        predictions_json_str = (
+            json.dumps(predictions_compact) if predictions_compact else None
+        )
+        new_record = ModelRecord(
+            experiment_id=exp_id,
+            filename=filename,
+            name=request.model_name or None,
+            model_path=model_file,
+            model_type=stored_model_type,
+            pipeline_type=stored_pipeline_type,
+            accuracy=metrics.get("accuracy"),
+            precision=metrics.get("precision"),
+            recall=metrics.get("recall"),
+            f1_score=metrics.get("f1_score"),
+            metrics_json=mr_metrics_json,
+            predictions_json=predictions_json_str,
+            splits_used=splits_used,
+            dataset_id=active_ds.id,
+        )
+        db.add(new_record)
+        db.flush()
+        logger.info(
+            f"Created ModelRecord id={new_record.id}, "
+            f"filename={filename}, type={stored_model_type}"
+        )
+
     db.commit()
 
     return ml_data

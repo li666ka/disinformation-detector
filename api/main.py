@@ -29,7 +29,7 @@ from api.routers import datasets as datasets_router
 from api.routers import verification as verification_router
 from api.routers import analytics as analytics_router
 from api.routers import ensembles as ensembles_router
-from api.routers import real_world as real_world_router
+from api.routers import analyze_v2 as analyze_v2_router
 
 from api.text_preprocessing import preprocess_for_bayes, preprocess_for_transformer
 from api.fact_check import verify_post
@@ -73,7 +73,40 @@ app.include_router(llm_presets_router.router)
 app.include_router(verification_router.router)
 app.include_router(analytics_router.router)
 app.include_router(ensembles_router.router)
-app.include_router(real_world_router.router)
+app.include_router(analyze_v2_router.router)
+
+
+# ── ML server offline → structured 503 ──────────────────────────────────────
+from api.ml_client import MLServerError, MLServerNotReadyError, MLServerOfflineError
+from fastapi.requests import Request as _FastAPIRequest
+from fastapi.responses import JSONResponse as _JSONResponse
+
+
+@app.exception_handler(MLServerError)
+def _ml_server_error_handler(_request: _FastAPIRequest, exc: MLServerError):
+    """Уніфікований структурований response для ML offline / not ready."""
+    code = (
+        "ml_server_offline"
+        if isinstance(exc, MLServerOfflineError)
+        else "ml_server_not_ready"
+        if isinstance(exc, MLServerNotReadyError)
+        else "ml_server_error"
+    )
+    user_msg = (
+        "Colab ML server недоступний. "
+        "Перевір Colab notebook і онови ML_SERVER_URL (або COLAB_NGROK_URL) у .env"
+        if code == "ml_server_offline"
+        else "Colab ML server недоступний"
+    )
+    return _JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "error": code,
+            "message": user_msg,
+            "detail": exc.message,
+            "checked_url": exc.checked_url,
+        },
+    )
 
 FEATURE_GROUP_KEYS: dict[str, list[str]] = {
     "emotional": [
@@ -106,6 +139,23 @@ def read_root():
     return {"status": "System is running", "model_loaded": True}
 
 
+@app.get("/health")
+def health_check():
+    """Liveness self-probe. ML-сервер перевіряти НЕ обов'язково — для цього є
+    `/ml-server/status`. Тут лише FastAPI alive-сигнал для k8s/uptime probes."""
+    return {"status": "ok", "service": "fake_news_api"}
+
+
+@app.get("/ml-server/status")
+def ml_server_status(force: bool = False):
+    """Cached health-check Colab ML server. Використовується FE banner-ом.
+
+    Query: `?force=true` обходить 30s cache.
+    """
+    from api.ml_client import check_status
+    return check_status(force=force)
+
+
 # ── POST /analyze ─────────────────────────────────────────────────────────────
 
 class AnalyzeRequest(BaseModel):
@@ -127,15 +177,19 @@ def analyze_text(
         raise HTTPException(status_code=404, detail="Модель не знайдена")
 
     mtype = record.model_type
-    colab_url = os.environ.get("COLAB_NGROK_URL", "").strip()
+    # ml_client.colab_url() — нова обгортка над env (ML_SERVER_URL || COLAB_NGROK_URL).
+    # Для real-Colab гілок використовуй ml_client.ensure_healthy() — він кешує
+    # health-check і кидає MLServerOfflineError/MLServerNotReadyError, які
+    # exception handler перетворює на структурований 503.
+    from api import ml_client
+    colab_url = ml_client.colab_url() or ""
 
     # Aggregated pipeline reformats the input as [TWEET]/[SOCIAL]/[ARTICLE]
     # and dispatches to /predict_deberta. NB more не використовує aggregated:
     # нові article-level NB моделі йдуть напряму у /predict_nb нижче, а старі
     # aggregated NB записи інференсяться так само на сирому тексті.
     if record.pipeline_type == "aggregated" and mtype == "deberta":
-        if not colab_url:
-            raise HTTPException(status_code=503, detail="COLAB_NGROK_URL не встановлено")
+        colab_url = ml_client.ensure_healthy()
         article_text = _fetch_article_for_aggregated(request.text)
         formatted = _format_aggregated_inference_text(request.text, article_text)
         payload: dict = {"text": formatted}
@@ -157,7 +211,10 @@ def analyze_text(
             raise HTTPException(status_code=resp.status_code, detail=f"Colab error: {resp.text[:500]}")
 
     if mtype == "nb":
-        if colab_url:
+        # NB має local fallback: пробуємо Colab лише якщо він зараз healthy.
+        # `check_status()` кешується 30s — не б'ємо мережу перед кожним /analyze.
+        colab_status = ml_client.check_status()
+        if colab_status["ok"]:
             try:
                 payload = {"text": request.text}
                 if record.model_path:
@@ -176,7 +233,8 @@ def analyze_text(
                     }
                 raise HTTPException(status_code=502, detail=f"Colab error: {resp.text}")
             except requests.exceptions.ConnectionError:
-                raise HTTPException(status_code=503, detail="Colab недоступний. Перевірте COLAB_NGROK_URL.")
+                ml_client.invalidate_cache()
+                # Падаємо у local fallback — для NB це валідний шлях.
         # Fallback: local model
         result = detector.predict(preprocess_for_bayes(request.text), use_text=True)
         prob = result["score"]
@@ -187,8 +245,7 @@ def analyze_text(
         }
 
     if mtype == "distilbert":
-        if not colab_url:
-            raise HTTPException(status_code=503, detail="COLAB_NGROK_URL не встановлено")
+        colab_url = ml_client.ensure_healthy()
         try:
             payload = {"text": preprocess_for_transformer(request.text)}
             if record.model_path:
@@ -213,8 +270,7 @@ def analyze_text(
     # Legacy: old records still tagged "deberta" — route to /predict_distilbert
     # (Colab keeps it as the canonical endpoint; old /predict_deberta is deprecated).
     if mtype == "deberta":
-        if not colab_url:
-            raise HTTPException(status_code=503, detail="COLAB_NGROK_URL не встановлено")
+        colab_url = ml_client.ensure_healthy()
         try:
             payload = {"text": preprocess_for_transformer(request.text)}
             if record.model_path:
@@ -237,8 +293,7 @@ def analyze_text(
             raise HTTPException(status_code=503, detail="Colab недоступний. Перевірте COLAB_NGROK_URL.")
 
     if mtype in ("gnn", "gin", "sage"):
-        if not colab_url:
-            raise HTTPException(status_code=503, detail="COLAB_NGROK_URL не встановлено")
+        colab_url = ml_client.ensure_healthy()
         if not record.model_path:
             raise HTTPException(status_code=400, detail="GNN модель не має model_path")
 

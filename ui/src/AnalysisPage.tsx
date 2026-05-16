@@ -1,54 +1,54 @@
 // ui/src/AnalysisPage.tsx
 import React, { useEffect, useMemo, useState } from "react";
 import api from "./api";
-import { cn } from "./lib/utils";
+import { toast } from "sonner";
 import { Button } from "./components/ui/button";
+import { Input } from "./components/ui/input";
+import { Textarea } from "./components/ui/textarea";
+import { Label } from "./components/ui/label";
 import {
   Card,
   CardContent,
-  CardDescription,
   CardHeader,
   CardTitle,
+  CardDescription,
 } from "./components/ui/card";
-import { Textarea } from "./components/ui/textarea";
-import { Badge } from "./components/ui/badge";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "./components/ui/tabs";
 import {
   Select,
   SelectContent,
   SelectGroup,
   SelectItem,
   SelectLabel,
-  SelectSeparator,
   SelectTrigger,
   SelectValue,
 } from "./components/ui/select";
+import { Checkbox } from "./components/ui/checkbox";
+import { Switch } from "./components/ui/switch";
+import { Alert, AlertDescription } from "./components/ui/alert";
 import {
-  AlertTriangle,
-  CheckCircle2,
-  HelpCircle,
-  Loader2,
+  FileText,
+  Link as LinkIcon,
   Search,
-  Brain,
+  Loader2,
   Sparkles,
+  Brain,
   Cpu,
+  Globe,
+  Settings2,
+  Wand2,
+  ShieldCheck,
+  AlertTriangle,
+  RefreshCw,
 } from "lucide-react";
-import { toast } from "sonner";
-import type { ModelRecord } from "./types";
+import { AnalysisResultPanel } from "./components/AnalysisResultPanel";
+import type {
+  AnalyzeInputMode,
+  AnalyzeV2Request,
+  AnalyzeV2Response,
+  ModelRecord,
+} from "./types";
 
-interface AnalyzeResult {
-  label: "FAKE" | "REAL" | "UNCERTAIN";
-  confidence: number;
-  probability: number | null;
-  reason?: string;
-  base_model_used?: string;
-  mode?: string;
-}
-
-interface AnalysisPageProps {
-  onDeepCheckRequest?: (text: string) => void;
-}
-
-// Icon per model type
 const TYPE_ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
   nb: Cpu,
   deberta: Brain,
@@ -62,365 +62,516 @@ const TYPE_LABELS: Record<string, string> = {
   nb: "Naive Bayes",
   deberta: "DeBERTa",
   distilbert: "DistilBERT",
-  llm: "LLM (Gemini)",
+  llm: "LLM (Claude)",
   gin: "GIN",
   sage: "GraphSAGE",
 };
 
-export default function AnalysisPage({ onDeepCheckRequest }: AnalysisPageProps = {}) {
+const EXCLUDED_TYPES = new Set(["gin", "sage", "gnn"]);
+const SOURCES = ["mastodon", "bluesky", "rss"] as const;
+
+interface AnalysisPageProps {
+  onDeepCheckRequest?: (text: string) => void;
+}
+
+export default function AnalysisPage({
+  onDeepCheckRequest,
+}: AnalysisPageProps = {}) {
+  // Models + selection
   const [models, setModels] = useState<ModelRecord[]>([]);
-  const [modelId, setModelId] = useState<number | null>(null);
-  const [text, setText] = useState<string>("");
-  const [result, setResult] = useState<AnalyzeResult | null>(null);
-  const [loading, setLoading] = useState<boolean>(false);
+  const [modelId, setModelId] = useState<number | "auto">("auto");
   const [loadingModels, setLoadingModels] = useState<boolean>(true);
 
-  useEffect(() => {
-    loadModels();
-  }, []);
+  // Request state
+  const [loading, setLoading] = useState<boolean>(false);
+  const [result, setResult] = useState<AnalyzeV2Response | null>(null);
 
-  const loadModels = () => {
+  // Per-mode input
+  const [mode, setMode] = useState<AnalyzeInputMode>("text");
+  const [textInput, setTextInput] = useState<string>("");
+  const [urlInput, setUrlInput] = useState<string>("");
+  const [claimInput, setClaimInput] = useState<string>("");
+
+  // Options
+  const [extractClaim, setExtractClaim] = useState<boolean>(true);
+  const [factCheck, setFactCheck] = useState<boolean>(false);
+  const [classifyExtracted, setClassifyExtracted] = useState<boolean>(false);
+  const [searchSources, setSearchSources] = useState<Set<string>>(
+    new Set(SOURCES),
+  );
+  const [searchLimit, setSearchLimit] = useState<number>(20);
+
+  // ML server health (Colab ngrok tunnel часто падає — показуємо banner)
+  type MLStatus = {
+    ok: boolean;
+    url_set: boolean;
+    reachable: boolean;
+    ready: boolean;
+    detail: string;
+    checked_url: string | null;
+  };
+  const [mlStatus, setMlStatus] = useState<MLStatus | null>(null);
+
+  const refreshMlStatus = (force = false) => {
+    api
+      .get<MLStatus>(`/ml-server/status${force ? "?force=true" : ""}`)
+      .then(({ data }) => setMlStatus(data))
+      .catch(() => setMlStatus(null));
+  };
+
+  useEffect(() => {
     setLoadingModels(true);
     api
       .get<ModelRecord[]>("/models")
-      .then(({ data }) => {
-        setModels(data);
-        // Auto-select first trained model (prefer non-LLM since it has accuracy),
-        // else first LLM
-        const firstTrained = data.find((m) => m.model_type !== "llm");
-        const firstLLM = data.find((m) => m.model_type === "llm");
-        const initial = firstTrained || firstLLM;
-        if (initial) setModelId(initial.id);
-      })
-      .catch(() => { })
+      .then(({ data }) => setModels(data))
+      .catch(() => toast.error("Не вдалося завантажити моделі"))
       .finally(() => setLoadingModels(false));
-  };
 
-  // Group models by type (trained ML vs LLM presets)
-  const { trainedModels, llmPresets } = useMemo(() => {
-    const trained = models.filter((m) => m.model_type !== "llm");
-    const llm = models.filter((m) => m.model_type === "llm");
-    return { trainedModels: trained, llmPresets: llm };
+    refreshMlStatus();
+  }, []);
+
+  // Чи обрана модель потребує Colab? Для LLM presets — ні, для всіх інших — так.
+  const selectedModel =
+    modelId === "auto" ? null : models.find((m) => m.id === modelId) || null;
+  const needsColab =
+    !selectedModel || (selectedModel.model_type !== "llm");
+
+  const mlBlocking = needsColab && mlStatus !== null && !mlStatus.ok;
+
+  const { realWorldModels, limitedModels } = useMemo(() => {
+    const realWorld: ModelRecord[] = [];
+    const limited: ModelRecord[] = [];
+    for (const m of models) {
+      (EXCLUDED_TYPES.has(m.model_type) ? limited : realWorld).push(m);
+    }
+    return { realWorldModels: realWorld, limitedModels: limited };
   }, [models]);
 
-  const selectedModel = models.find((m) => m.id === modelId);
-  const isLLMSelected = selectedModel?.model_type === "llm";
+  const currentInput =
+    mode === "text" ? textInput : mode === "url" ? urlInput : claimInput;
+  const inputValid = currentInput.trim().length >= 3;
+  const searchValid = mode !== "claim_search" || searchSources.size > 0;
 
-  const handleSubmit = async () => {
-    if (!text.trim()) {
-      toast.error("Введіть текст для аналізу");
+  const handleAnalyze = async () => {
+    if (!inputValid) {
+      toast.error(
+        mode === "text"
+          ? "Введіть текст"
+          : mode === "url"
+          ? "Введіть URL"
+          : "Введіть твердження",
+      );
       return;
     }
-    if (!modelId) {
-      toast.error("Оберіть модель");
+    if (!searchValid) {
+      toast.error("Оберіть хоча б одне джерело для пошуку");
       return;
     }
 
     setLoading(true);
     setResult(null);
-    try {
-      const { data } = await api.post<AnalyzeResult>("/analyze", {
-        text,
-        model_id: modelId,
-      });
-      setResult(data);
 
-      if (data.label === "UNCERTAIN") {
+    const req: AnalyzeV2Request = {
+      input_mode: mode,
+      input: currentInput.trim(),
+      model_id: modelId === "auto" ? null : modelId,
+      options: {
+        extract_claim: extractClaim,
+        classify: true,
+        fact_check: factCheck,
+        classify_extracted: classifyExtracted,
+        search_sources: Array.from(searchSources),
+        search_limit: searchLimit,
+      },
+    };
+
+    try {
+      const { data } = await api.post<AnalyzeV2Response>("/analyze/v2", req);
+      setResult(data);
+      if (data.classification?.label === "UNCERTAIN") {
         toast.warning("Модель не змогла дати впевнену оцінку");
       }
     } catch (err: any) {
-      const detail = err.response?.data?.detail;
-      toast.error(typeof detail === "string" ? detail : "Помилка під час аналізу");
+      const body = err?.response?.data;
+      if (body?.error === "ml_server_offline" || body?.error === "ml_server_not_ready") {
+        // 503 з нашого ml_client → оновити banner і показати message як є
+        refreshMlStatus(true);
+        toast.error(body.message || "ML server недоступний");
+      } else {
+        const detail = body?.detail;
+        toast.error(
+          typeof detail === "string" ? detail : "Помилка під час аналізу",
+        );
+      }
     } finally {
       setLoading(false);
     }
   };
 
-  const isFake = result?.label === "FAKE";
-  const isUncertain = result?.label === "UNCERTAIN";
+  const handleSwitchMode = (v: string) => {
+    setMode(v as AnalyzeInputMode);
+    setResult(null);
+  };
+
+  // Deep-verification button — preserves existing App.tsx integration.
+  const canDeepCheck =
+    !!onDeepCheckRequest &&
+    !!result?.classification &&
+    result.classification.label !== "UNCERTAIN";
 
   return (
     <div className="space-y-6">
       <div>
         <h2 className="text-2xl font-bold tracking-tight">Аналіз тексту</h2>
         <p className="text-muted-foreground">
-          Перевірте текст на ознаки дезінформації за допомогою обраної моделі
+          Перевірте текст, пост за URL, або поширення твердження у соцмережах
         </p>
       </div>
 
-      {/* Model Selection */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-lg">Модель</CardTitle>
-          <CardDescription>
-            Оберіть натреновану модель або LLM-пресет для класифікації
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          {loadingModels ? (
-            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              <Loader2 className="h-4 w-4 animate-spin" />
-              Завантаження моделей...
-            </div>
-          ) : models.length === 0 ? (
-            <div className="space-y-2 text-sm text-muted-foreground">
-              <p>Немає доступних моделей.</p>
-              <p className="text-xs">
-                Натренуйте модель у розділі <strong>"Навчання моделі"</strong> або створіть{" "}
-                <strong>LLM пресет</strong>.
-              </p>
-            </div>
-          ) : (
-            <div className="space-y-2">
-              <Select
-                value={modelId?.toString() || ""}
-                onValueChange={(v) => {
-                  setModelId(Number(v));
-                  setResult(null);
-                }}
-              >
-                <SelectTrigger className="max-w-md">
-                  <SelectValue placeholder="Оберіть модель" />
-                </SelectTrigger>
-                <SelectContent>
-                  {trainedModels.length > 0 && (
-                    <SelectGroup>
-                      <SelectLabel className="flex items-center gap-1.5 text-xs">
-                        <Brain className="h-3 w-3" />
-                        Натреновані моделі
-                      </SelectLabel>
-                      {trainedModels.map((m) => {
-                        const Icon = TYPE_ICONS[m.model_type] || Cpu;
-                        return (
-                          <SelectItem key={m.id} value={m.id.toString()}>
-                            <span className="flex items-center gap-2">
-                              <Icon className="h-3.5 w-3.5 shrink-0" />
-                              <span className="truncate">{m.name || m.model_type}</span>
-                              {m.accuracy != null && (
-                                <span className="text-xs text-muted-foreground">
-                                  {(m.accuracy * 100).toFixed(1)}%
-                                </span>
-                              )}
-                            </span>
-                          </SelectItem>
-                        );
-                      })}
-                    </SelectGroup>
-                  )}
-
-                  {trainedModels.length > 0 && llmPresets.length > 0 && <SelectSeparator />}
-
-                  {llmPresets.length > 0 && (
-                    <SelectGroup>
-                      <SelectLabel className="flex items-center gap-1.5 text-xs">
-                        <Sparkles className="h-3 w-3" />
-                        LLM пресети
-                      </SelectLabel>
-                      {llmPresets.map((m) => (
-                        <SelectItem key={m.id} value={m.id.toString()}>
-                          <span className="flex items-center gap-2">
-                            <Sparkles className="h-3.5 w-3.5 shrink-0" />
-                            <span className="truncate">{m.name}</span>
-                          </span>
-                        </SelectItem>
-                      ))}
-                    </SelectGroup>
-                  )}
-                </SelectContent>
-              </Select>
-
-              {selectedModel && (
-                <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                  <Badge variant="secondary" className="font-normal">
-                    {TYPE_LABELS[selectedModel.model_type] || selectedModel.model_type}
-                  </Badge>
-                  {selectedModel.accuracy != null && (
-                    <span>
-                      Accuracy: <strong>{(selectedModel.accuracy * 100).toFixed(1)}%</strong>
-                    </span>
-                  )}
-                  {isLLMSelected && (
-                    <span className="italic">
-                      LLM — результат без числових метрик (не тренувалась на цьому датасеті)
-                    </span>
-                  )}
+      {/* ML server status banner — показуємо лише коли offline і обрана модель потребує Colab */}
+      {mlBlocking && (
+        <Alert variant="destructive">
+          <AlertTriangle className="h-4 w-4" />
+          <AlertDescription className="flex items-start justify-between gap-3 flex-wrap">
+            <div>
+              <strong>ML server offline.</strong>{" "}
+              Запусти Colab notebook і онови <code>ML_SERVER_URL</code> (або
+              <code> COLAB_NGROK_URL</code>) у <code>.env</code>, тоді перезапусти FastAPI.
+              {mlStatus?.detail && (
+                <div className="text-xs mt-1 opacity-80">
+                  Деталі: {mlStatus.detail}
+                  {mlStatus.checked_url ? ` (${mlStatus.checked_url})` : ""}
                 </div>
               )}
+              <div className="text-xs mt-1 opacity-80">
+                LLM-пресети (Claude) продовжать працювати — для них Colab не потрібен.
+              </div>
             </div>
-          )}
-        </CardContent>
-      </Card>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => refreshMlStatus(true)}
+              className="shrink-0"
+            >
+              <RefreshCw className="h-3.5 w-3.5 mr-1.5" />
+              Перевірити
+            </Button>
+          </AlertDescription>
+        </Alert>
+      )}
 
-      {/* Text Input */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-lg">Текст для аналізу</CardTitle>
-          <CardDescription>
-            Вставте текст новини, посту або заголовок — модель оцінить ймовірність дезінформації
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <Textarea
-            rows={7}
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-            placeholder="Вставте текст новини для перевірки..."
-          />
-          <Button
-            className="w-full"
-            size="lg"
-            onClick={handleSubmit}
-            disabled={loading || models.length === 0}
-          >
-            {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-            {loading
-              ? isLLMSelected
-                ? "LLM думає..."
-                : "Аналіз..."
-              : "Аналізувати"}
-          </Button>
-        </CardContent>
-      </Card>
+      {/* Mode selector */}
+      <Tabs value={mode} onValueChange={handleSwitchMode}>
+        <TabsList className="grid grid-cols-3 max-w-2xl">
+          <TabsTrigger value="text" className="gap-1.5">
+            <FileText className="h-4 w-4" />
+            Текст
+          </TabsTrigger>
+          <TabsTrigger value="url" className="gap-1.5">
+            <LinkIcon className="h-4 w-4" />
+            За URL
+          </TabsTrigger>
+          <TabsTrigger value="claim_search" className="gap-1.5">
+            <Search className="h-4 w-4" />
+            Поширення
+          </TabsTrigger>
+        </TabsList>
 
-      {/* Verdict */}
-      {result && (
-        <>
-          <Card
-            className={cn(
-              "border-2",
-              isFake
-                ? "border-red-500 bg-red-50 dark:bg-red-950/20"
-                : isUncertain
-                  ? "border-amber-500 bg-amber-50 dark:bg-amber-950/20"
-                  : "border-green-500 bg-green-50 dark:bg-green-950/20",
-            )}
-          >
-            <CardContent className="py-8 text-center">
-              {isFake ? (
-                <AlertTriangle className="h-12 w-12 text-red-500 mx-auto mb-3" />
-              ) : isUncertain ? (
-                <HelpCircle className="h-12 w-12 text-amber-500 mx-auto mb-3" />
-              ) : (
-                <CheckCircle2 className="h-12 w-12 text-green-500 mx-auto mb-3" />
-              )}
-              <h2
-                className={cn(
-                  "text-3xl font-bold",
-                  isFake
-                    ? "text-red-600 dark:text-red-400"
-                    : isUncertain
-                      ? "text-amber-600 dark:text-amber-400"
-                      : "text-green-600 dark:text-green-400",
-                )}
-              >
-                {isFake
-                  ? "ДЕЗІНФОРМАЦІЯ"
-                  : isUncertain
-                    ? "НЕВИЗНАЧЕНО"
-                    : "ДОСТОВІРНО"}
-              </h2>
-              {!isUncertain && (
-                <p className="text-muted-foreground mt-2">
-                  Впевненість: {(result.confidence * 100).toFixed(1)}%
-                </p>
-              )}
-              {isUncertain && result.reason && (
-                <p className="text-sm text-amber-700 dark:text-amber-400 mt-3 max-w-md mx-auto italic">
-                  "{result.reason}"
-                </p>
-              )}
+        <TabsContent value="text" className="mt-4">
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Звичайний текст</CardTitle>
+              <CardDescription>
+                Вставте текст / статтю / твіт — отримаєте verdict моделі +
+                extraction
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <Textarea
+                placeholder="Вставте текст тут (мінімум 10 символів)…"
+                value={textInput}
+                onChange={(e) => setTextInput(e.target.value)}
+                rows={6}
+                className="resize-y"
+              />
+              <p className="text-xs text-muted-foreground mt-2">
+                {textInput.length} символів
+              </p>
             </CardContent>
           </Card>
+        </TabsContent>
 
-          {/* LLM reasoning (якщо модель дала reason) */}
-          {!isUncertain && result.reason && (
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-lg flex items-center gap-2">
-                  <Sparkles className="h-5 w-5" />
-                  Обґрунтування моделі
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <p className="text-sm text-muted-foreground italic leading-relaxed">
-                  "{result.reason}"
-                </p>
-              </CardContent>
-            </Card>
-          )}
+        <TabsContent value="url" className="mt-4">
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Пост за посиланням</CardTitle>
+              <CardDescription>
+                URL поста з Mastodon, Bluesky або RSS-статті — fetch + аналіз
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <Input
+                placeholder="https://mastodon.social/@user/123… або https://bsky.app/profile/…/post/…"
+                value={urlInput}
+                onChange={(e) => setUrlInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !loading) handleAnalyze();
+                }}
+              />
+              <div className="text-xs text-muted-foreground mt-2">
+                Підтримуються Mastodon (@user/id), Bluesky
+                (profile/handle/post/id), RSS articles.
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
 
-          {/* Cross-link to deep verification */}
-          <Card className="border-dashed">
-            <CardContent className="py-4">
-              <div className="flex items-start gap-3">
-                <Search className="h-5 w-5 text-muted-foreground shrink-0 mt-0.5" />
-                <div className="flex-1 space-y-2">
-                  <p className="text-sm font-medium">Потрібна детальніша перевірка?</p>
-                  <p className="text-xs text-muted-foreground">
-                    Запустити multi-hop верифікацію: витягування тверджень, пошук доказів у
-                    новинах та соцмережах, аналіз консистентності.
-                  </p>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => {
-                      if (onDeepCheckRequest) {
-                        onDeepCheckRequest(text);
-                      } else {
-                        navigator.clipboard.writeText(text);
-                        toast.info(
-                          "Текст скопійовано. Вставте у вкладці 'Верифікація'.",
-                        );
-                      }
-                    }}
-                  >
-                    <Search className="mr-2 h-4 w-4" />
-                    Перевірити детальніше →
-                  </Button>
+        <TabsContent value="claim_search" className="mt-4">
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base flex items-center gap-2">
+                <Wand2 className="h-4 w-4" />
+                Аналіз поширення твердження
+              </CardTitle>
+              <CardDescription>
+                Введіть твердження → знайдемо схожі пости у соцмережах →
+                класифікуємо кожен → агрегований verdict
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div>
+                <Label>Твердження для перевірки</Label>
+                <Textarea
+                  placeholder='Наприклад: "COVID vaccine causes infertility"'
+                  value={claimInput}
+                  onChange={(e) => setClaimInput(e.target.value)}
+                  rows={3}
+                  className="mt-1.5 resize-y"
+                />
+              </div>
+
+              <div className="space-y-3 pt-2 border-t">
+                <Label className="text-xs">Параметри пошуку</Label>
+
+                <div className="flex flex-wrap gap-3">
+                  {SOURCES.map((src) => (
+                    <label
+                      key={src}
+                      className="flex items-center gap-2 cursor-pointer"
+                    >
+                      <Checkbox
+                        checked={searchSources.has(src)}
+                        onCheckedChange={(checked) => {
+                          setSearchSources((prev) => {
+                            const next = new Set(prev);
+                            if (checked) next.add(src);
+                            else next.delete(src);
+                            return next;
+                          });
+                        }}
+                      />
+                      <span className="text-sm capitalize">{src}</span>
+                    </label>
+                  ))}
+                </div>
+
+                <div className="flex items-center gap-3">
+                  <Label htmlFor="search-limit" className="text-sm">
+                    Максимум постів:
+                  </Label>
+                  <Input
+                    id="search-limit"
+                    type="number"
+                    min={5}
+                    max={50}
+                    value={searchLimit}
+                    onChange={(e) =>
+                      setSearchLimit(
+                        Math.max(
+                          5,
+                          Math.min(50, Number(e.target.value) || 20),
+                        ),
+                      )
+                    }
+                    className="w-20"
+                  />
                 </div>
               </div>
             </CardContent>
           </Card>
+        </TabsContent>
+      </Tabs>
 
-          {/* Details */}
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-lg">Деталі</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <ul className="space-y-1.5 text-sm">
-                <li className="flex justify-between py-1 border-b border-border">
-                  <span className="font-medium">Модель</span>
-                  <span className="text-muted-foreground text-right">
-                    {selectedModel?.name || selectedModel?.model_type}
+      {/* Settings */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base flex items-center gap-2">
+            <Settings2 className="h-4 w-4" />
+            Налаштування
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {/* Model */}
+          <div className="space-y-1.5">
+            <Label>Модель класифікації</Label>
+            <Select
+              value={modelId === "auto" ? "auto" : modelId.toString()}
+              onValueChange={(v) =>
+                setModelId(v === "auto" ? "auto" : Number(v))
+              }
+            >
+              <SelectTrigger className="max-w-md">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="auto">
+                  <span className="flex items-center gap-2">
+                    <Wand2 className="h-3.5 w-3.5" />
+                    <span>Auto (найкраща для real-world)</span>
                   </span>
-                </li>
-                {result.probability != null && (
-                  <li className="flex justify-between py-1 border-b border-border">
-                    <span className="font-medium">Ймовірність FAKE</span>
-                    <span className="text-muted-foreground">
-                      {(result.probability * 100).toFixed(1)}%
-                    </span>
-                  </li>
+                </SelectItem>
+
+                {realWorldModels.length > 0 && (
+                  <SelectGroup>
+                    <SelectLabel className="text-xs">Рекомендовані</SelectLabel>
+                    {realWorldModels.map((m) => {
+                      const Icon = TYPE_ICONS[m.model_type] || Cpu;
+                      return (
+                        <SelectItem key={m.id} value={m.id.toString()}>
+                          <span className="flex items-center gap-2">
+                            <Icon className="h-3.5 w-3.5 shrink-0" />
+                            <span className="truncate">
+                              {m.name || TYPE_LABELS[m.model_type]}
+                            </span>
+                            {m.f1_score != null && (
+                              <span className="text-xs text-muted-foreground">
+                                F1={m.f1_score.toFixed(3)}
+                              </span>
+                            )}
+                          </span>
+                        </SelectItem>
+                      );
+                    })}
+                  </SelectGroup>
                 )}
-                {result.base_model_used && (
-                  <li className="flex justify-between py-1 border-b border-border">
-                    <span className="font-medium">Базова модель</span>
-                    <span className="text-muted-foreground">{result.base_model_used}</span>
-                  </li>
+
+                {limitedModels.length > 0 && (
+                  <SelectGroup>
+                    <SelectLabel className="text-xs">
+                      Потребують cascade
+                    </SelectLabel>
+                    {limitedModels.map((m) => {
+                      const Icon = TYPE_ICONS[m.model_type] || Brain;
+                      return (
+                        <SelectItem key={m.id} value={m.id.toString()}>
+                          <span className="flex items-center gap-2 opacity-75">
+                            <Icon className="h-3.5 w-3.5 shrink-0" />
+                            <span className="truncate">{m.name}</span>
+                          </span>
+                        </SelectItem>
+                      );
+                    })}
+                  </SelectGroup>
                 )}
-                {result.mode && (
-                  <li className="flex justify-between py-1">
-                    <span className="font-medium">Режим</span>
-                    <Badge variant="outline" className="text-xs">
-                      {result.mode}
-                    </Badge>
-                  </li>
-                )}
-              </ul>
+              </SelectContent>
+            </Select>
+            {selectedModel && (
+              <p className="text-xs text-muted-foreground">
+                Тип:{" "}
+                {TYPE_LABELS[selectedModel.model_type] || selectedModel.model_type}
+                {selectedModel.f1_score != null &&
+                  ` · F1=${selectedModel.f1_score.toFixed(3)}`}
+              </p>
+            )}
+          </div>
+
+          {/* Options */}
+          <div className="space-y-2 pt-3 border-t">
+            <Label className="text-xs">Опції</Label>
+            <div className="space-y-2">
+              <label className="flex items-center gap-2 cursor-pointer text-sm">
+                <Switch
+                  checked={extractClaim}
+                  onCheckedChange={setExtractClaim}
+                />
+                <Brain className="h-3.5 w-3.5 text-blue-600" />
+                <span>LLM extract claim + stance</span>
+              </label>
+
+              {extractClaim && (
+                <label className="flex items-center gap-2 cursor-pointer text-sm ml-8">
+                  <Switch
+                    checked={classifyExtracted}
+                    onCheckedChange={setClassifyExtracted}
+                  />
+                  <span className="text-xs">
+                    Класифікувати extracted claim замість raw text
+                  </span>
+                </label>
+              )}
+
+              <label className="flex items-center gap-2 cursor-pointer text-sm">
+                <Switch checked={factCheck} onCheckedChange={setFactCheck} />
+                <Globe className="h-3.5 w-3.5 text-amber-600" />
+                <span>Fact-check проти Google</span>
+              </label>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Submit */}
+      <div className="flex flex-wrap items-center gap-2">
+        <Button
+          onClick={handleAnalyze}
+          disabled={loading || !inputValid || !searchValid || loadingModels || mlBlocking}
+          size="lg"
+          className="w-full sm:w-auto"
+        >
+          {loading ? (
+            <>
+              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+              Аналізую…
+            </>
+          ) : (
+            <>
+              <Sparkles className="h-4 w-4 mr-2" />
+              Аналізувати
+            </>
+          )}
+        </Button>
+
+        {canDeepCheck && (
+          <Button
+            variant="outline"
+            size="lg"
+            onClick={() =>
+              onDeepCheckRequest?.(result?.original_text || currentInput)
+            }
+          >
+            <ShieldCheck className="h-4 w-4 mr-2" />
+            Глибока верифікація
+          </Button>
+        )}
+      </div>
+
+      {/* Result / empty state */}
+      {result ? (
+        <AnalysisResultPanel result={result} />
+      ) : (
+        !loading && (
+          <Card className="border-dashed">
+            <CardContent className="py-12 text-center">
+              <FileText className="h-12 w-12 mx-auto text-muted-foreground mb-3" />
+              <p className="text-sm text-muted-foreground">
+                {mode === "text" && "Вставте текст і натисніть «Аналізувати»"}
+                {mode === "url" && "Введіть URL поста і натисніть «Аналізувати»"}
+                {mode === "claim_search" &&
+                  "Введіть твердження для аналізу поширення"}
+              </p>
             </CardContent>
           </Card>
-        </>
+        )
       )}
     </div>
   );

@@ -6,7 +6,7 @@ import { Badge } from "./components/ui/badge";
 import {
   AlertTriangle, CheckCircle2, HelpCircle, ExternalLink, Loader2,
   RefreshCw, Heart, Repeat2, MessageCircle, ShieldCheck, Users,
-  Clock, Globe, Bot, Info, Rss,
+  Clock, Globe, Bot, Info, Rss, Brain,
 } from "lucide-react";
 import type { ClassifiedPost } from "./types";
 import { FactCheckBadge } from "./components/FactCheckBadge";
@@ -18,6 +18,8 @@ interface PostCardProps {
   onClassify: () => void;
   onVerify?: () => void;
   onDetails?: () => void;
+  onExtract?: () => void;
+  extracting?: boolean;
 }
 
 const SOURCE_STYLES: Record<string, string> = {
@@ -58,6 +60,8 @@ export default function PostCard({
   onClassify,
   onVerify,
   onDetails,
+  onExtract,
+  extracting,
 }: PostCardProps) {
   const [expanded, setExpanded] = useState<boolean>(false);
 
@@ -238,6 +242,39 @@ export default function PostCard({
                 <Info className="h-3 w-3" />
                 {post.labels.join(", ")}
               </span>
+            )}
+          </div>
+        )}
+
+        {/* LLM Extraction — окремий етап перед класифікацією */}
+        {onExtract && (
+          <div className="mt-1">
+            {!post.extraction || post.extraction.status === "idle" ? (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={onExtract}
+                disabled={extracting}
+                className="gap-1.5"
+              >
+                {extracting ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Brain className="h-3.5 w-3.5" />
+                )}
+                {extracting ? "Розпаковую…" : "Розпакувати claim"}
+              </Button>
+            ) : post.extraction.status === "loading" ? (
+              <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                LLM розпаковує claim…
+              </div>
+            ) : post.extraction.status === "error" ? (
+              <div className="text-xs text-red-600 dark:text-red-400">
+                Помилка extraction: {post.extraction.error}
+              </div>
+            ) : (
+              <ExtractionBlock extraction={post.extraction} />
             )}
           </div>
         )}
@@ -459,6 +496,106 @@ function ClassificationBadge({
       <Button variant="ghost" size="sm" onClick={onReclassify} disabled={classifying} className="ml-auto h-7 px-2">
         <RefreshCw className={cn("h-3 w-3", classifying && "animate-spin")} />
       </Button>
+    </div>
+  );
+}
+
+
+// ── Extraction block (LLM розпакування claim+stance) ─────────────────────
+
+const STANCE_LABEL_UA: Record<string, { label: string; color: string }> = {
+  supports: {
+    label: "стверджує",
+    color: "bg-blue-100 text-blue-700 dark:bg-blue-950/40 dark:text-blue-300",
+  },
+  refutes: {
+    label: "спростовує",
+    color: "bg-purple-100 text-purple-700 dark:bg-purple-950/40 dark:text-purple-300",
+  },
+  neutral: {
+    label: "нейтрально",
+    color: "bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300",
+  },
+};
+
+const AUTHOR_VERDICT_LABEL_UA: Record<string, { label: string; color: string }> = {
+  REAL: {
+    label: "автор вважає ПРАВДОЮ",
+    color: "bg-green-100 text-green-700 dark:bg-green-950/40 dark:text-green-300",
+  },
+  FAKE: {
+    label: "автор вважає ФЕЙКОМ",
+    color: "bg-red-100 text-red-700 dark:bg-red-950/40 dark:text-red-300",
+  },
+  MIXED: {
+    label: "автор нейтральний",
+    color: "bg-amber-100 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300",
+  },
+};
+
+function ExtractionBlock({
+  extraction,
+}: {
+  extraction: NonNullable<ClassifiedPost["extraction"]>;
+}) {
+  if (extraction.status !== "done" || !extraction.claims) return null;
+
+  if (extraction.claims.length === 0) {
+    return (
+      <div className="text-xs text-muted-foreground bg-muted/40 px-3 py-2 rounded-md border">
+        <div className="flex items-center gap-1.5">
+          <Brain className="h-3.5 w-3.5" />
+          <span className="font-medium">LLM не знайшов перевіряємих claims</span>
+          {extraction.method && (
+            <Badge variant="outline" className="text-[10px] h-4 px-1.5 ml-auto">
+              {extraction.method === "llm" ? "Claude" : "regex"}
+            </Badge>
+          )}
+        </div>
+        <p className="mt-1 italic">
+          Пост, ймовірно, виражає особисту думку/емоцію без конкретного твердження.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-2 bg-muted/40 px-3 py-2.5 rounded-md border">
+      <div className="flex items-center gap-1.5 text-xs font-medium">
+        <Brain className="h-3.5 w-3.5 text-blue-600 dark:text-blue-400" />
+        <span>LLM Extraction</span>
+        <Badge variant="outline" className="text-[10px] h-4 px-1.5">
+          {extraction.method === "llm" ? "Claude" : "regex"}
+        </Badge>
+        <span className="text-muted-foreground">·</span>
+        <span className="text-muted-foreground">
+          {extraction.claims.length} claim{extraction.claims.length !== 1 ? "s" : ""}
+        </span>
+      </div>
+
+      {extraction.claims.map((c, idx) => {
+        const stance = STANCE_LABEL_UA[c.stance] || STANCE_LABEL_UA.neutral;
+        const author =
+          AUTHOR_VERDICT_LABEL_UA[c.author_verdict] || AUTHOR_VERDICT_LABEL_UA.MIXED;
+        return (
+          <div
+            key={idx}
+            className="space-y-1.5 border-l-2 border-blue-300 dark:border-blue-700 pl-2"
+          >
+            <div className="text-sm font-medium leading-snug">
+              {idx + 1}. «{c.claim}»
+            </div>
+            <div className="flex flex-wrap items-center gap-1.5">
+              <Badge className={cn("text-[10px] h-5", stance.color)}>
+                {stance.label}
+              </Badge>
+              <Badge className={cn("text-[10px] h-5", author.color)}>
+                {author.label}
+              </Badge>
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }

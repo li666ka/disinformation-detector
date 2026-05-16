@@ -66,6 +66,7 @@ export default function SourcesPage() {
   const [limit, setLimit] = useState<number>(20);
   const [postUrl, setPostUrl] = useState<string>("");
   const [classifyingIds, setClassifyingIds] = useState<Set<string>>(new Set());
+  const [extractingIds, setExtractingIds] = useState<Set<string>>(new Set());
   const [batchClassifying, setBatchClassifying] = useState<boolean>(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [detailsPostId, setDetailsPostId] = useState<string | null>(null);
@@ -135,6 +136,47 @@ export default function SourcesPage() {
     } catch (err: any) {
       toast.error(err.response?.data?.detail || "Не вдалося завантажити пост");
     } finally { setLoadingPosts(false); }
+  };
+
+  const handleExtract = async (post: ClassifiedPost) => {
+    setExtractingIds((prev) => new Set(prev).add(post.id));
+    setPosts((prev) => prev.map((p) =>
+      p.id === post.id ? { ...p, extraction: { status: "loading" } } : p
+    ));
+
+    try {
+      const { data } = await api.post("/sources/extract-claims", {
+        text: post.text,
+        use_llm: true,
+      });
+
+      setPosts((prev) => prev.map((p) =>
+        p.id === post.id
+          ? {
+              ...p,
+              extraction: {
+                status: "done",
+                claims: data.claims,
+                method: data.method,
+              },
+            }
+          : p
+      ));
+    } catch (err: any) {
+      const detail = err?.response?.data?.detail || err?.message || "Unknown error";
+      setPosts((prev) => prev.map((p) =>
+        p.id === post.id
+          ? { ...p, extraction: { status: "error", error: detail } }
+          : p
+      ));
+      toast.error(`Extraction failed: ${detail}`);
+    } finally {
+      setExtractingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(post.id);
+        return next;
+      });
+    }
   };
 
   const classifyPost = async (post: ClassifiedPost) => {
@@ -472,6 +514,8 @@ export default function SourcesPage() {
           canClassify={!!modelId}
           onClassify={() => classifyPost(post)}
           onDetails={() => openDetails(post)}
+          onExtract={() => handleExtract(post)}
+          extracting={extractingIds.has(post.id)}
         />
       ))}
 

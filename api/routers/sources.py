@@ -14,9 +14,10 @@ import logging
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, HttpUrl
+from pydantic import BaseModel, Field, HttpUrl
 
 from api.auth import get_current_user
+from api.claim_extractor import extract_claims as sync_extract_claims
 from api.database import User
 from api.sources import (
     BaseNewsSource,
@@ -283,3 +284,47 @@ async def get_post_details_endpoint(
         raise HTTPException(status_code=404, detail=msg)
 
     return PostDetailsResponse(**details.to_dict())
+
+
+# ── Claim extraction (LLM розпакування поста перед класифікацією) ─────────
+
+class ExtractClaimsRequest(BaseModel):
+    text: str = Field(..., min_length=10, description="Текст поста")
+    use_llm: bool = Field(default=True, description="Чи використовувати LLM (інакше regex fallback)")
+
+
+class ExtractedClaimItem(BaseModel):
+    claim: str
+    stance: str  # "supports" | "refutes" | "neutral"
+    author_verdict: str  # "REAL" | "FAKE" | "MIXED"
+
+
+class ExtractClaimsResponse(BaseModel):
+    claims: list[ExtractedClaimItem]
+    method: str  # "llm" | "fallback"
+    count: int
+
+
+@router.post("/extract-claims", response_model=ExtractClaimsResponse)
+def extract_post_claims(
+    req: ExtractClaimsRequest,
+    _: User = Depends(get_current_user),
+):
+    """Витягти claims + stance автора з тексту поста.
+
+    Окремий етап перед класифікацією — щоб користувач бачив що саме LLM
+    розпакував із raw тексту. Використовує `api.claim_extractor.extract_claims`
+    (синхронний; той самий, що й fact_check.verify_post).
+    """
+    try:
+        result = sync_extract_claims(req.text, use_llm=req.use_llm)
+    except Exception as e:
+        logger.error(f"extract-claims failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Extraction failed: {e}")
+
+    claims = result.get("claims", []) or []
+    return ExtractClaimsResponse(
+        claims=[ExtractedClaimItem(**c) for c in claims],
+        method=result.get("method", "fallback"),
+        count=len(claims),
+    )

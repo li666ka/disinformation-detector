@@ -9,7 +9,6 @@ import DatasetsPage from "./DatasetsPage";
 import LLMPresetsPage from "./LLMPresetsPage";
 import EnsemblesPage from "./EnsemblesPage";
 import VerificationPage from "./VerificationPage";
-import RealWorldPage from "./RealWorldPage";
 import api from "./api";
 import { useTheme } from "./ThemeProvider";
 import { cn } from "./lib/utils";
@@ -24,7 +23,7 @@ import {
   Brain, FileText, Globe, Database, Sparkles,
   Boxes, LogOut, Sun, Moon, Target, Crosshair,
   Activity, Award, Loader2, AlertTriangle, CheckCircle2, ShieldCheck,
-  Layers, BarChart3, Megaphone,
+  Layers, BarChart3,
 } from "lucide-react";
 import { toast } from "sonner";
 import type {
@@ -72,8 +71,7 @@ const NAV_ITEMS = [
   { icon: Layers, label: "Ансамблі", tab: "ensembles" },
   { icon: FileText, label: "Аналіз тексту", tab: "prediction" },
   { icon: ShieldCheck, label: "Верифікація", tab: "verification" },
-  { icon: Globe, label: "Реальні дані", tab: "sources" },
-  { icon: Megaphone, label: "Аналіз поста", tab: "real-world" },
+  { icon: Globe, label: "Моніторинг соцмереж", tab: "sources" },
 ];
 
 function ActiveDatasetBanner() {
@@ -841,7 +839,6 @@ function App() {
           {activeTab === "llm-presets" && <LLMPresetsPage />}
           {activeTab === "ensembles" && <EnsemblesPage />}
           {activeTab === "models" && <ModelsPage />}
-          {activeTab === "real-world" && <RealWorldPage />}
         </div>
       </main>
     </div>

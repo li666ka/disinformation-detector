@@ -452,6 +452,23 @@ export interface ClassifiedPost extends NewsItem {
   } | null;
   factCheck?: FactCheckResult;
   factCheckLoading?: boolean;
+  // LLM claim extraction — окремий етап перед класифікацією
+  extraction?: PostExtraction;
+}
+
+// ── Extracted claim (LLM розпакування поста) ─────────────────────────────
+
+export interface ExtractedClaimItem {
+  claim: string;
+  stance: ClaimStance;
+  author_verdict: "REAL" | "FAKE" | "MIXED";
+}
+
+export interface PostExtraction {
+  status: "idle" | "loading" | "done" | "error";
+  claims?: ExtractedClaimItem[];
+  method?: "llm" | "fallback";
+  error?: string;
 }
 
 // ── Fact Check (Google Fact Check Tools API) ──────────────────────────────
@@ -901,4 +918,91 @@ export interface CreateEnsembleRequest {
   voting_type: VotingType;
   member_model_ids: number[];
   weights?: Record<string, number>;
+}
+
+
+// ── Unified Analyzer (POST /analyze/v2) ─────────────────────────────────
+
+export type AnalyzeInputMode = "text" | "url" | "claim_search";
+
+export interface AnalyzeV2Options {
+  extract_claim?: boolean;
+  classify?: boolean;
+  fact_check?: boolean;
+  search_sources?: string[];
+  search_limit?: number;
+  classify_extracted?: boolean;
+}
+
+export interface AnalyzeV2Request {
+  input_mode: AnalyzeInputMode;
+  input: string;
+  model_id?: number | null;
+  options?: AnalyzeV2Options;
+}
+
+export interface AnalyzeV2ExtractedClaim {
+  claim: string;
+  stance: ClaimStance;
+  author_verdict: "REAL" | "FAKE" | "MIXED";
+}
+
+export interface AnalyzeV2Extraction {
+  claims: AnalyzeV2ExtractedClaim[];
+  method: "llm" | "fallback" | string;
+}
+
+export interface AnalyzeV2Classification {
+  label: "FAKE" | "REAL" | "UNCERTAIN";
+  confidence: number;
+  probability?: number | null;
+  reason?: string;
+  base_model_used?: string;
+  mode?: string;
+}
+
+export interface AnalyzeV2ModelUsed {
+  id: number;
+  name: string;
+  type: string;
+  f1_score?: number | null;
+}
+
+export interface AnalyzeV2SimilarPost {
+  post: NewsItem;
+  extraction?: AnalyzeV2Extraction;
+  classification?: AnalyzeV2Classification;
+}
+
+export interface AnalyzeV2Aggregated {
+  total_posts: number;
+  stance_distribution: {
+    supports: number;
+    refutes: number;
+    neutral: number;
+  };
+  classification_distribution: {
+    FAKE: number;
+    REAL: number;
+    UNCERTAIN: number;
+  };
+  majority_verdict: "FAKE" | "REAL" | "UNCERTAIN" | "UNKNOWN";
+  majority_confidence: number;
+  consensus_strength: number;
+  spread_warning?: string | null;
+}
+
+export interface AnalyzeV2Response {
+  input_mode: AnalyzeInputMode;
+  original_text: string;
+  fetched_post?: NewsItem | null;
+  extraction?: AnalyzeV2Extraction | null;
+  classification?: AnalyzeV2Classification | null;
+  classified_text?: string | null;
+  model_used?: AnalyzeV2ModelUsed | null;
+  fact_check?: FactCheckResult | null;
+  similar_posts?: AnalyzeV2SimilarPost[] | null;
+  aggregated?: AnalyzeV2Aggregated | null;
+  timing_ms: Record<string, number>;
+  warnings: string[];
 }

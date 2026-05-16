@@ -29,6 +29,7 @@ from api.routers import datasets as datasets_router
 from api.routers import verification as verification_router
 from api.routers import analytics as analytics_router
 from api.routers import ensembles as ensembles_router
+from api.routers import real_world as real_world_router
 
 from api.text_preprocessing import preprocess_for_bayes, preprocess_for_transformer
 from api.fact_check import verify_post
@@ -72,6 +73,7 @@ app.include_router(llm_presets_router.router)
 app.include_router(verification_router.router)
 app.include_router(analytics_router.router)
 app.include_router(ensembles_router.router)
+app.include_router(real_world_router.router)
 
 FEATURE_GROUP_KEYS: dict[str, list[str]] = {
     "emotional": [

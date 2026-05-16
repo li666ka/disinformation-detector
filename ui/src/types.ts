@@ -884,6 +884,11 @@ export interface Ensemble {
   f1_macro: number | null;
   roc_auc: number | null;
   confusion_matrix: ConfusionMatrix | null;
+  alignment_info?: {
+    common_test_size: number;
+    member_test_sizes: number[];
+    max_member_size: number;
+  } | null;
 
   splits_used: string | null;
   dataset_id: number | null;

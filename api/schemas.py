@@ -341,6 +341,7 @@ class EnsembleResponse(BaseModel):
     roc_auc: Optional[float] = None
 
     confusion_matrix: Optional[dict] = None
+    alignment_info: Optional[dict] = None
     splits_used: Optional[str] = None
     dataset_id: Optional[int] = None
 

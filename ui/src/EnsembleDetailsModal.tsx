@@ -219,6 +219,47 @@ export default function EnsembleDetailsModal({ ensemble, onClose }: Props) {
             </div>
           )}
 
+          {/* Alignment info — показуємо коли test sets членів не співпадають */}
+          {(() => {
+            const ai = ensemble.alignment_info;
+            if (!ai) return null;
+            const lossPct = ai.max_member_size > 0
+              ? ((ai.max_member_size - ai.common_test_size) / ai.max_member_size) * 100
+              : 0;
+            const mismatched = ai.common_test_size < ai.max_member_size;
+            const high = lossPct > 20;
+            if (!mismatched) {
+              return (
+                <div className="text-xs text-muted-foreground">
+                  Тестова вибірка: {ai.common_test_size} статей (повний збіг між членами)
+                </div>
+              );
+            }
+            return (
+              <div
+                className={cn(
+                  "rounded-md border p-3 text-xs",
+                  high
+                    ? "border-red-300 bg-red-50 text-red-900 dark:border-red-900 dark:bg-red-950/30 dark:text-red-200"
+                    : "border-amber-300 bg-amber-50 text-amber-900 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-200"
+                )}
+              >
+                <div className="font-medium mb-0.5">
+                  Тестові вибірки членів не співпадають
+                </div>
+                <div>
+                  Спільна тестова вибірка: <b>{ai.common_test_size}</b> / {ai.max_member_size} статей
+                  {" "}(втрата {lossPct.toFixed(1)}%). Розміри по членах: {ai.member_test_sizes.join(", ")}.
+                </div>
+                {high && (
+                  <div className="mt-1">
+                    Високий розрив (&gt; 20%) — перетренуйте членів з уніфікованим preprocessing.
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+
           {/* Members */}
           <div>
             <h3 className="text-sm font-semibold mb-2">Члени ансамблю</h3>

@@ -184,6 +184,30 @@ def create_ensemble(
 
     metrics = result["metrics"]
 
+    n_aligned = len(result["article_ids"])
+    member_test_sizes: list[int] = []
+    for m in models:
+        size = n_aligned
+        if m.metrics_json:
+            try:
+                mm = json.loads(m.metrics_json)
+                size = int(mm.get("test_size") or n_aligned)
+            except Exception:
+                size = n_aligned
+        member_test_sizes.append(size)
+
+    alignment_info = {
+        "common_test_size": n_aligned,
+        "member_test_sizes": member_test_sizes,
+        "max_member_size": max(member_test_sizes) if member_test_sizes else n_aligned,
+    }
+    logger.info(
+        f"Ensemble '{req.name}' aligned: common={n_aligned}, "
+        f"members={member_test_sizes}"
+    )
+
+    metrics_with_alignment = {**metrics, "alignment_info": alignment_info}
+
     ensemble = Ensemble(
         user_id=current_user.id,
         name=req.name,
@@ -196,7 +220,7 @@ def create_ensemble(
         f1_score=metrics.get("f1_score"),
         f1_macro=metrics.get("f1_macro"),
         roc_auc=metrics.get("roc_auc"),
-        metrics_json=json.dumps(metrics),
+        metrics_json=json.dumps(metrics_with_alignment),
         splits_used=splits_used,
         dataset_id=dataset_id,
         is_active=False,
@@ -348,13 +372,33 @@ def re_evaluate_ensemble(
         raise HTTPException(status_code=400, detail=str(e))
 
     metrics = result["metrics"]
+
+    n_aligned = len(result["article_ids"])
+    member_test_sizes: list[int] = []
+    for m in models:
+        size = n_aligned
+        if m.metrics_json:
+            try:
+                mm = json.loads(m.metrics_json)
+                size = int(mm.get("test_size") or n_aligned)
+            except Exception:
+                size = n_aligned
+        member_test_sizes.append(size)
+
+    alignment_info = {
+        "common_test_size": n_aligned,
+        "member_test_sizes": member_test_sizes,
+        "max_member_size": max(member_test_sizes) if member_test_sizes else n_aligned,
+    }
+    metrics_with_alignment = {**metrics, "alignment_info": alignment_info}
+
     ensemble.accuracy = metrics.get("accuracy")
     ensemble.precision = metrics.get("precision")
     ensemble.recall = metrics.get("recall")
     ensemble.f1_score = metrics.get("f1_score")
     ensemble.f1_macro = metrics.get("f1_macro")
     ensemble.roc_auc = metrics.get("roc_auc")
-    ensemble.metrics_json = json.dumps(metrics)
+    ensemble.metrics_json = json.dumps(metrics_with_alignment)
     db.commit()
     db.refresh(ensemble)
 
@@ -387,10 +431,12 @@ def _serialize_ensemble(
         })
 
     cm = None
+    alignment_info = None
     if ensemble.metrics_json:
         try:
             full = json.loads(ensemble.metrics_json)
             cm = full.get("confusion_matrix")
+            alignment_info = full.get("alignment_info")
         except Exception:
             pass
 
@@ -408,6 +454,7 @@ def _serialize_ensemble(
         f1_macro=ensemble.f1_macro,
         roc_auc=ensemble.roc_auc,
         confusion_matrix=cm,
+        alignment_info=alignment_info,
         splits_used=ensemble.splits_used,
         dataset_id=ensemble.dataset_id,
         is_active=ensemble.is_active,

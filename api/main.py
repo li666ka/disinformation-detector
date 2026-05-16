@@ -244,7 +244,9 @@ def analyze_text(
             "probability": prob,
         }
 
-    if mtype == "distilbert":
+    if mtype in ("distilbert", "deberta"):
+        # Legacy "deberta" records рутятся у /predict_distilbert так само —
+        # Colab тримає його як canonical endpoint.
         colab_url = ml_client.ensure_healthy()
         try:
             payload = {"text": preprocess_for_transformer(request.text)}
@@ -263,34 +265,59 @@ def analyze_text(
                     "confidence": data.get("confidence", abs(prob - 0.5) * 2),
                     "probability": prob,
                 }
-            raise HTTPException(status_code=502, detail=f"Colab error: {resp.text}")
-        except requests.exceptions.ConnectionError:
-            raise HTTPException(status_code=503, detail="Colab недоступний. Перевірте COLAB_NGROK_URL.")
-
-    # Legacy: old records still tagged "deberta" — route to /predict_distilbert
-    # (Colab keeps it as the canonical endpoint; old /predict_deberta is deprecated).
-    if mtype == "deberta":
-        colab_url = ml_client.ensure_healthy()
-        try:
-            payload = {"text": preprocess_for_transformer(request.text)}
-            if record.model_path:
-                payload["model_path"] = record.model_path
-            resp = requests.post(
-                f"{colab_url.rstrip('/')}/predict_distilbert",
-                json=payload,
-                timeout=120,
+            # Розбираємо typed-помилки з Colab (див. ml_server/routes.py
+            # predict_distilbert: empty_text / model_not_loaded / model_load_failed).
+            try:
+                err = resp.json()
+            except ValueError:
+                err = {}
+            err_code = err.get("error")
+            msg = err.get("message") or resp.text[:300]
+            if err_code == "empty_text":
+                raise HTTPException(
+                    status_code=400,
+                    detail="Текст порожній після extraction",
+                )
+            if err_code == "model_not_loaded":
+                raise HTTPException(
+                    status_code=503,
+                    detail=(
+                        "DistilBERT модель не завантажена на Colab. "
+                        "Перетренуй модель або перезапусти Colab notebook."
+                    ),
+                )
+            # .pkl bundle проблеми (з нової lazy-load логіки):
+            if err_code in (
+                "pkl_not_found",
+                "model_dir_not_found",
+                "incomplete_model_dir",
+            ):
+                raise HTTPException(
+                    status_code=404,
+                    detail=(
+                        f"Файли моделі не знайдено на Colab диску ({err_code}). "
+                        "Найімовірніше runtime restart втратив локальний кеш — "
+                        "перетренуй або перезавантаж з Drive."
+                    ),
+                )
+            if err_code in ("wrong_model_type", "missing_model_dir"):
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Bundle .pkl некоректний ({err_code}): {msg}",
+                )
+            if err_code == "model_load_failed":
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"Не вдалося завантажити модель: {msg}",
+                )
+            raise HTTPException(
+                status_code=502, detail=f"Colab error: {resp.text[:500]}"
             )
-            if resp.status_code == 200:
-                data = resp.json()
-                prob = data.get("probability", 0.5)
-                return {
-                    "label": data["label"],
-                    "confidence": data.get("confidence", abs(prob - 0.5) * 2),
-                    "probability": prob,
-                }
-            raise HTTPException(status_code=502, detail=f"Colab error: {resp.text}")
         except requests.exceptions.ConnectionError:
-            raise HTTPException(status_code=503, detail="Colab недоступний. Перевірте COLAB_NGROK_URL.")
+            raise HTTPException(
+                status_code=503,
+                detail="Colab недоступний. Перевірте COLAB_NGROK_URL.",
+            )
 
     if mtype in ("gnn", "gin", "sage"):
         colab_url = ml_client.ensure_healthy()

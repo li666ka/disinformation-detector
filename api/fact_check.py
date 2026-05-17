@@ -160,8 +160,10 @@ def fact_check_claim(
         log.debug(f"Cache hit: {claim_text[:50]}...")
         return _cache[ck]
 
+    query = _build_factcheck_query(claim_text)
+    log.debug(f"FACT-CHECK query original={claim_text!r} compact={query!r}")
     params = {
-        "query": claim_text,
+        "query": query,
         "languageCode": language,
         "key": api_key,
         "pageSize": max_results,
@@ -197,25 +199,37 @@ def fact_check_claim(
         _store_cache(ck, result)
         return result
 
-    SIM_THRESHOLD = 0.4
+    # Знижений з 0.4 до 0.25 + hybrid similarity (Jaccard ∪ char-ratio).
+    # SequenceMatcher ratio один не давав ≥0.4 навіть на семантично-еквівалентних
+    # парах, тому fact-check завжди повертав UNKNOWN.
+    SIM_THRESHOLD = 0.25
     best_claim = None
     best_sim = 0.0
-    for cand in claims:
+    log.debug(f"FACT-CHECK got {len(claims)} candidates")
+    for i, cand in enumerate(claims):
         cand_text = cand.get("text", "") or ""
         sim = _similarity(claim_text, cand_text)
+        log.debug(f"  [{i}] sim={sim:.3f} text={cand_text[:80]!r}")
         if sim > best_sim and cand.get("claimReview"):
             best_sim = sim
             best_claim = cand
 
-    if best_claim is None or best_sim < SIM_THRESHOLD:
+    if best_claim is None:
+        # Google повернув candidates, але жоден без claimReview — це справді
+        # «нічого корисного». Залишаємо UNKNOWN.
         result = {
             "found": False,
             "claims": claims,
             "verdict_normalized": "UNKNOWN",
-            "message": f"Low similarity matches only (best={best_sim:.2f})",
+            "message": f"No reviewable candidates (best_sim={best_sim:.2f})",
         }
         _store_cache(ck, result)
         return result
+
+    # Є best candidate з review, але similarity ≥ 0.25 — забираємо вердикт,
+    # а нижче за threshold помічаємо low_confidence_match (UI може показати
+    # «можливо релевантне»).
+    low_confidence = best_sim < SIM_THRESHOLD
 
     top_claim = best_claim
     reviews = top_claim.get("claimReview", [])
@@ -229,6 +243,7 @@ def fact_check_claim(
         "top_claim": top_claim,
         "claim_text_matched": top_claim.get("text", ""),
         "match_similarity": best_sim,
+        "low_confidence_match": low_confidence,
         "verdict": rating,
         "verdict_normalized": normalize_rating(rating),
         "publisher": publisher,
@@ -240,10 +255,51 @@ def fact_check_claim(
     return result
 
 
+_STOPWORDS: frozenset[str] = frozenset({
+    "the", "a", "an", "is", "are", "was", "were", "be", "of", "to", "in",
+    "on", "at", "for", "with", "by", "from", "and", "or", "but", "not",
+    "this", "that", "it", "its", "do", "does", "did", "has", "have", "had",
+    "will", "would", "can", "could", "may", "might", "should",
+})
+
+_TOKEN_RE = re.compile(r"[a-zA-Z]+")
+
+
 def _similarity(a: str, b: str) -> float:
+    """Hybrid similarity: max(Jaccard, SequenceMatcher).
+
+    Why: char-level SequenceMatcher на коротких claim-ах дає 0.2-0.3 навіть
+    коли темa спільна (e.g. "Pfizer vaccine causes autism" vs офіційний
+    fact-check заголовок "Pfizer COVID-19 vaccine is not linked to autism").
+    Jaccard на content tokens ловить такі випадки чесніше. Беремо max,
+    щоб одного з двох сигналів вистачало.
+    """
     if not a or not b:
         return 0.0
-    return SequenceMatcher(None, a.lower(), b.lower()).ratio()
+    tokens_a = {t for t in _TOKEN_RE.findall(a.lower()) if t not in _STOPWORDS}
+    tokens_b = {t for t in _TOKEN_RE.findall(b.lower()) if t not in _STOPWORDS}
+    if tokens_a and tokens_b:
+        jaccard = len(tokens_a & tokens_b) / len(tokens_a | tokens_b)
+    else:
+        jaccard = 0.0
+    char_sim = SequenceMatcher(None, a.lower(), b.lower()).ratio()
+    return max(jaccard, char_sim)
+
+
+def _build_factcheck_query(text: str) -> str:
+    """Compact query для Google Fact Check API. ≤6 content words.
+
+    API працює помітно краще на коротких queries — повний claim з пунктуацією
+    часто повертає 0 кандидатів, а зведений до ключових слів дає десятки.
+    """
+    cleaned = re.sub(r"\s+", " ", text or "").strip()
+    if not cleaned:
+        return ""
+    words = cleaned.split()
+    if len(words) <= 6:
+        return cleaned
+    content = [w for w in words if w.lower() not in _STOPWORDS]
+    return " ".join(content[:6]) or cleaned
 
 
 def _store_cache(key: str, value: dict) -> None:

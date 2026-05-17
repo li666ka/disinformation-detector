@@ -109,6 +109,8 @@ export default function PostCard({
               {post.source}
             </Badge>
 
+            <RelevanceBadge score={post._relevance_score} />
+
             {post.author && (
               <span className="text-sm font-medium">
                 {post.author_handle || post.author}
@@ -597,5 +599,35 @@ function ExtractionBlock({
         );
       })}
     </div>
+  );
+}
+
+
+// ── Relevance badge (token-overlap score from /sources/search) ───────────
+
+function RelevanceBadge({ score }: { score?: number }) {
+  if (score == null) return null;
+  const pct = Math.round(score * 100);
+  let cls: string;
+  let label: string;
+  if (score >= 0.7) {
+    cls = "bg-green-100 text-green-700 border-green-200 dark:bg-green-950/40 dark:text-green-300";
+    label = "Точний збіг";
+  } else if (score >= 0.5) {
+    cls = "bg-blue-100 text-blue-700 border-blue-200 dark:bg-blue-950/40 dark:text-blue-300";
+    label = "Релевантне";
+  } else if (score >= 0.3) {
+    cls = "bg-amber-100 text-amber-700 border-amber-200 dark:bg-amber-950/40 dark:text-amber-300";
+    label = "Можливо релевантне";
+  } else {
+    return null; // нижчий за поріг — взагалі не показуємо
+  }
+  return (
+    <Badge
+      className={cn("text-[10px] border", cls)}
+      title={`Relevance: ${pct}%`}
+    >
+      {label} · {pct}%
+    </Badge>
   );
 }

@@ -38,6 +38,8 @@ class SourceSearchResponse(BaseModel):
     posts: list[dict]
     total: int
     sources_used: list[str]
+    # Опційне повідомлення для UI (напр., "знайдено N постів але всі нерелевантні")
+    message: Optional[str] = None
 
 
 class FetchUrlRequest(BaseModel):
@@ -136,7 +138,17 @@ async def search_posts(
     limit: int = Query(20, ge=1, le=100),
     current_user: User = Depends(get_current_user),
 ):
-    """Пошук постів за ключовими словами у обраних джерелах."""
+    """Пошук постів за ключовими словами у обраних джерелах.
+
+    Після fetch — token-overlap relevance filter (api.sources._relevance):
+    bluesky/mastodon search дають AND-збіг і часто повертають далеких
+    сусідів, тому додатково фільтруємо за частотою query-keywords у пості.
+    Якщо після фільтрації нічого — повторюємо з 2-словним query і нижчим
+    порогом 0.2; якщо все одно нічого — повертаємо порожній список з
+    `message`, не 502.
+    """
+    from api.sources._relevance import filter_by_relevance, relevance_score
+
     source_names = _parse_sources_param(sources)
 
     items, successful, errors = await _run_across_sources(
@@ -144,15 +156,59 @@ async def search_posts(
     )
 
     if not successful:
-        # Жодне джерело не спрацювало — це помилка
         raise HTTPException(
             status_code=502,
             detail="Усі джерела недоступні: " + "; ".join(errors),
         )
 
+    total_raw = len(items)
+    filtered = filter_by_relevance(query, items, min_score=0.3)
+    logger.info(
+        f"Relevance filter: {total_raw} → {len(filtered)} (query={query!r})"
+    )
+
+    fallback_message: Optional[str] = None
+
+    # Fallback: спробуємо коротший query з нижчим порогом.
+    if not filtered and total_raw > 0:
+        from api.sources._relevance import _tokenize  # noqa: WPS450 — same module
+        top_keywords = list(_tokenize(query))[:2]
+        if top_keywords:
+            short_query = " ".join(top_keywords)
+            logger.info(f"Fallback search with query={short_query!r}")
+            items_retry, _retry_ok, _ = await _run_across_sources(
+                source_names, "search", query=short_query, limit=limit,
+            )
+            filtered = filter_by_relevance(query, items_retry, min_score=0.2)
+            total_raw = max(total_raw, len(items_retry))
+            logger.info(
+                f"After fallback: {len(items_retry)} fetched → {len(filtered)} relevant"
+            )
+
+    if not filtered:
+        fallback_message = (
+            f"Знайдено {total_raw} постів, але жоден не містить достатньо "
+            "keywords із запиту. Спробуйте конкретнішу або коротшу пошукову фразу."
+        )
+        return SourceSearchResponse(
+            posts=[],
+            total=0,
+            sources_used=successful,
+            message=fallback_message,
+        )
+
+    # Серіалізуємо з прикріпленим _relevance_score.
+    posts_with_score: list[dict] = []
+    for item in filtered[:limit]:
+        d = item.to_dict() if hasattr(item, "to_dict") else dict(item)
+        d["_relevance_score"] = round(
+            relevance_score(query, item.text, item.title), 3
+        )
+        posts_with_score.append(d)
+
     return SourceSearchResponse(
-        posts=_items_to_dicts(items, limit),
-        total=len(items),
+        posts=posts_with_score,
+        total=len(filtered),
         sources_used=successful,
     )
 

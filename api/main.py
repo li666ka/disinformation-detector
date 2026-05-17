@@ -65,6 +65,12 @@ detector = FakeNewsModel()
 # Ініціалізація БД та підключення роутерів
 os.makedirs("uploaded_datasets", exist_ok=True)
 create_tables()
+
+if not os.getenv("GOOGLE_FACT_CHECK_API_KEY"):
+    logger.warning(
+        "GOOGLE_FACT_CHECK_API_KEY not set — fact-check stage буде повертати "
+        "{found:false, error:'GOOGLE_FACT_CHECK_API_KEY not configured'}"
+    )
 app.include_router(auth_router.router)
 app.include_router(models_router.router)
 app.include_router(sources_router.router)
@@ -161,6 +167,7 @@ def ml_server_status(force: bool = False):
 class AnalyzeRequest(BaseModel):
     text: str
     model_id: int  # ModelRecord.id
+    explain: bool = False  # для NB: local log-odds attribution top tokens
 
 
 @app.post("/analyze")
@@ -211,14 +218,14 @@ def analyze_text(
             raise HTTPException(status_code=resp.status_code, detail=f"Colab error: {resp.text[:500]}")
 
     if mtype == "nb":
-        # NB має local fallback: пробуємо Colab лише якщо він зараз healthy.
-        # `check_status()` кешується 30s — не б'ємо мережу перед кожним /analyze.
+        # NB має local fallback (`detector`). Колab пробуємо лише коли:
+        # (a) Colab health=ok, (b) у моделі є model_path (NB на Drive, локально
+        # цього файлу немає). Без model_path local fallback — єдиний варіант.
         colab_status = ml_client.check_status()
-        if colab_status["ok"]:
+        try_colab = colab_status["ok"] and bool(record.model_path)
+        if try_colab:
             try:
-                payload = {"text": request.text}
-                if record.model_path:
-                    payload["model_path"] = record.model_path
+                payload = {"text": request.text, "model_path": record.model_path}
                 resp = requests.post(
                     f"{colab_url.rstrip('/')}/predict_nb",
                     json=payload,
@@ -226,23 +233,70 @@ def analyze_text(
                 )
                 if resp.status_code == 200:
                     data = resp.json()
-                    return {
+                    nb_response: dict = {
                         "label": data["label"],
                         "confidence": data["confidence"],
                         "probability": data["probability"],
                     }
-                raise HTTPException(status_code=502, detail=f"Colab error: {resp.text}")
+                    if request.explain:
+                        expl = detector.explain_nb_prediction(request.text)
+                        if expl is not None:
+                            nb_response["explanation"] = expl
+                    return nb_response
+
+                # Розбираємо typed errors з Colab. HTML-відповідь (404 від
+                # старого Colab без /predict_nb endpoint) — окремий випадок:
+                # тихо падаємо на local-fallback, бо це означає що ML-server
+                # просто не вміє цей route.
+                ctype = (resp.headers.get("content-type") or "").lower()
+                if resp.status_code == 404 and "text/html" in ctype:
+                    logger.warning(
+                        "Colab /predict_nb returned HTML 404 — endpoint missing. "
+                        "Falling back to local detector (`git pull` ml_server на Colab?)"
+                    )
+                else:
+                    try:
+                        err = resp.json()
+                    except ValueError:
+                        err = {}
+                    err_code = err.get("error")
+                    msg = err.get("message") or resp.text[:300]
+                    if err_code == "empty_text":
+                        raise HTTPException(400, "Текст порожній")
+                    if err_code in ("pkl_not_found", "model_path_required"):
+                        raise HTTPException(
+                            404,
+                            f"NB модель не знайдена на Colab диску ({err_code})",
+                        )
+                    if err_code == "wrong_model_type":
+                        raise HTTPException(
+                            400,
+                            f"Bundle на Colab — не NB: {err.get('got')}",
+                        )
+                    if err_code in ("aggregated_unsupported", "features_required"):
+                        raise HTTPException(400, msg)
+                    if err_code == "predict_failed":
+                        raise HTTPException(502, f"Colab predict_nb помилка: {msg}")
+                    # Невпізнана відповідь — підіймаємо 502 з обрізаним body
+                    raise HTTPException(
+                        502, f"Colab /predict_nb error: {resp.text[:300]}"
+                    )
             except requests.exceptions.ConnectionError:
                 ml_client.invalidate_cache()
                 # Падаємо у local fallback — для NB це валідний шлях.
         # Fallback: local model
         result = detector.predict(preprocess_for_bayes(request.text), use_text=True)
         prob = result["score"]
-        return {
+        nb_response = {
             "label": result["label"],
             "confidence": abs(prob - 0.5) * 2,
             "probability": prob,
         }
+        if request.explain:
+            expl = detector.explain_nb_prediction(request.text)
+            if expl is not None:
+                nb_response["explanation"] = expl
+        return nb_response
 
     if mtype in ("distilbert", "deberta"):
         # Legacy "deberta" records рутятся у /predict_distilbert так само —
@@ -260,11 +314,35 @@ def analyze_text(
             if resp.status_code == 200:
                 data = resp.json()
                 prob = data.get("probability", 0.5)
-                return {
+                distil_response: dict = {
                     "label": data["label"],
                     "confidence": data.get("confidence", abs(prob - 0.5) * 2),
                     "probability": prob,
                 }
+                # Local explanation через Colab /explain_distilbert.
+                # Окремий request — повільніший (~3-15s з IG), тому лише
+                # коли клієнт явно request.explain=True.
+                if request.explain:
+                    try:
+                        expl_payload = {"text": preprocess_for_transformer(request.text)}
+                        if record.model_path:
+                            expl_payload["model_path"] = record.model_path
+                        expl_resp = requests.post(
+                            f"{colab_url.rstrip('/')}/explain_distilbert",
+                            json=expl_payload,
+                            timeout=60,
+                        )
+                        if expl_resp.status_code == 200:
+                            distil_response["explanation"] = expl_resp.json()
+                        else:
+                            # Не валимо classification, просто логуємо.
+                            logger.warning(
+                                "explain_distilbert returned %s: %s",
+                                expl_resp.status_code, expl_resp.text[:200],
+                            )
+                    except Exception as e:
+                        logger.warning(f"explain_distilbert proxy failed: {e}")
+                return distil_response
             # Розбираємо typed-помилки з Colab (див. ml_server/routes.py
             # predict_distilbert: empty_text / model_not_loaded / model_load_failed).
             try:

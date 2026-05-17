@@ -172,28 +172,40 @@ class FakeNewsModel:
             ),
         )
 
+    def _extract_vectorizer_and_clf(self):
+        """Знайти (vectorizer, clf) у поточній моделі.
+
+        Підтримує:
+          - `_model_dict` зі схемою {vectorizer, classifier}
+          - `pipeline` (sklearn Pipeline) — duck-typed пошук кроку з
+            `get_feature_names_out` і кроку з `feature_log_prob_`.
+
+        Повертає (None, None) якщо щось відсутнє або clf не NB-сумісний.
+        """
+        vectorizer = None
+        clf = None
+        if self._model_dict is not None:
+            vectorizer = self._model_dict.get("vectorizer")
+            clf = self._model_dict.get("classifier")
+        elif self.pipeline is not None:
+            for _name, step in self.pipeline.steps:
+                if hasattr(step, "get_feature_names_out"):
+                    vectorizer = step
+                elif hasattr(step, "feature_log_prob_"):
+                    clf = step
+        if vectorizer is None or clf is None:
+            return None, None
+        if not hasattr(clf, "feature_log_prob_"):
+            return None, None
+        return vectorizer, clf
+
     def get_top_words(self, n: int = 20) -> dict | None:
         """
         Витягнути топ-N дискримінативних слів для FAKE та REAL класів.
         Працює тільки з Naive Bayes моделями (feature_log_prob_).
         """
-        vectorizer = None
-        clf = None
-
-        if self._model_dict is not None:
-            vectorizer = self._model_dict.get("vectorizer")
-            clf = self._model_dict.get("classifier")
-        elif self.pipeline is not None:
-            # Try to extract from pipeline steps
-            for name, step in self.pipeline.steps:
-                if hasattr(step, "get_feature_names_out"):
-                    vectorizer = step
-                elif hasattr(step, "feature_log_prob_"):
-                    clf = step
-
+        vectorizer, clf = self._extract_vectorizer_and_clf()
         if vectorizer is None or clf is None:
-            return None
-        if not hasattr(clf, "feature_log_prob_"):
             return None
 
         try:
@@ -226,6 +238,71 @@ class FakeNewsModel:
         except Exception as e:
             logger.warning(f"Failed to extract top words: {e}")
             return None
+
+    def explain_nb_prediction(self, text: str, top_k: int = 15) -> dict | None:
+        """Local NB explanation: які слова з ЦЬОГО тексту найсильніше
+        зсувають prediction у FAKE/REAL.
+
+        Метод — log-odds attribution:
+          attribution(word) = count_in_text · (log P(word|FAKE) − log P(word|REAL))
+
+        Знак attribution → напрямок (>0 FAKE, <0 REAL); модуль → сила.
+        Сума по всіх non-zero features ≈ logit P(FAKE)/P(REAL) (без bias).
+
+        Повертає None для не-NB моделей або коли vectorizer відсутній.
+        """
+        vectorizer, clf = self._extract_vectorizer_and_clf()
+        if vectorizer is None or clf is None:
+            return None
+
+        try:
+            processed = self._preprocess_for_explanation(text)
+            X = vectorizer.transform([processed])
+
+            classes = list(clf.classes_)
+            if 1 not in classes:
+                return None
+            fake_idx = classes.index(1)
+            real_idx = 1 - fake_idx
+
+            log_probs = clf.feature_log_prob_  # (n_classes, n_features)
+            diff = log_probs[fake_idx] - log_probs[real_idx]
+            feature_names = vectorizer.get_feature_names_out()
+
+            coo = X.tocoo()
+            contributions: list[dict] = []
+            for col, count in zip(coo.col, coo.data):
+                attribution = float(count) * float(diff[col])
+                contributions.append({
+                    "token": str(feature_names[col]),
+                    "count": int(count),
+                    "log_odds_diff": round(float(diff[col]), 4),
+                    "attribution": round(attribution, 4),
+                })
+
+            contributions.sort(key=lambda x: abs(x["attribution"]), reverse=True)
+            total = round(sum(c["attribution"] for c in contributions), 4)
+            return {
+                "method": "log_odds",
+                "tokens": contributions[:top_k],
+                "total_log_odds": total,
+                "prediction": "FAKE" if total > 0 else "REAL",
+                "n_features_used": len(contributions),
+            }
+        except Exception as e:
+            logger.warning(f"explain_nb_prediction failed: {e}")
+            return None
+
+    def _preprocess_for_explanation(self, text: str) -> str:
+        """Препроцесинг текcту для explanation MAY різнитись від _predict.
+
+        Логіка: якщо у pipeline/dict є власний preprocessor step із
+        атрибутом `transform` для рядка → sklearn vectorizer уже зробить
+        своє (TfidfVectorizer часто несе свій tokenizer); інакше — той
+        самий шлях, що при тренуванні NB: `preprocess_for_bayes`.
+        """
+        from api.text_preprocessing import preprocess_for_bayes
+        return preprocess_for_bayes(text)
 
     def _get_probability(self, clf, X, pipeline_text: str | None = None) -> float:
         """Extract P(FAKE) from classifier, handling various sklearn estimators."""

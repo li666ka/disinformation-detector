@@ -13,6 +13,7 @@ import {
   Clock,
 } from "lucide-react";
 import { cn } from "../lib/utils";
+import { ExplanationPanel, type ExplanationModelType } from "./ExplanationPanel";
 import type {
   AnalyzeV2Aggregated,
   AnalyzeV2Classification,
@@ -82,6 +83,17 @@ export function AnalysisResultPanel({ result }: { result: AnalyzeV2Response }) {
           modelUsed={result.model_used ?? null}
           classifiedText={result.classified_text ?? null}
           originalText={result.original_text}
+        />
+      )}
+
+      {result.classification?.explanation && (
+        <ExplanationPanel
+          modelType={_resolveExplanationModelType(
+            result.model_used?.type,
+            result.classification.explanation,
+          )}
+          explanation={result.classification.explanation}
+          originalText={result.classified_text || result.original_text}
         />
       )}
 
@@ -519,4 +531,23 @@ function SimilarPostMini({
       <p className="text-foreground line-clamp-2 leading-snug">{post?.text}</p>
     </div>
   );
+}
+
+
+// Резолвимо `ExplanationModelType` за model_type з ModelRecord. Якщо це
+// поле відсутнє — пробуємо вгадати за shape самого explanation (saliency
+// над токенами → distilbert/nb; graph nodes → gin/sage; reasoning → llm).
+function _resolveExplanationModelType(
+  modelType: string | undefined,
+  explanation: any,
+): ExplanationModelType {
+  const known = ["nb", "distilbert", "gin", "sage", "llm"] as const;
+  if (modelType && (known as readonly string[]).includes(modelType)) {
+    return modelType as ExplanationModelType;
+  }
+  if (Array.isArray(explanation?.tokens)) {
+    return explanation.method === "log_odds" ? "nb" : "distilbert";
+  }
+  if (Array.isArray(explanation?.important_nodes)) return "gin";
+  return "llm";
 }

@@ -435,6 +435,10 @@ export interface NewsItem {
   labels?: string[] | null;
 
   raw_metadata?: Record<string, unknown> | null;
+
+  // Доданий роутером /sources/search після token-overlap фільтрації
+  // (api/sources/_relevance.py). ∈ [0,1]; недоступний у /sources/recent.
+  _relevance_score?: number;
 }
 
 export interface PostClassification {
@@ -959,6 +963,9 @@ export interface AnalyzeV2Classification {
   reason?: string;
   base_model_used?: string;
   mode?: string;
+  // Local explanation, attached when client sets `explain=true`.
+  // Shape depends on model type — див. Explanation union.
+  explanation?: Explanation;
 }
 
 export interface AnalyzeV2ModelUsed {
@@ -1006,3 +1013,80 @@ export interface AnalyzeV2Response {
   timing_ms: Record<string, number>;
   warnings: string[];
 }
+
+
+// ── Local explanation (NB log-odds / IG / GNNExplainer / LLM reasoning) ─
+
+export interface TokenAttribution {
+  token: string;
+  attribution: number;
+  // NB:
+  count?: number;
+  log_odds_diff?: number;
+  // DistilBERT (IG):
+  position?: number;
+  is_subword?: boolean;
+}
+
+export interface NbExplanation {
+  method: "log_odds";
+  tokens: TokenAttribution[];
+  total_log_odds: number;
+  prediction: "FAKE" | "REAL";
+  n_features_used: number;
+}
+
+export interface IgExplanation {
+  method: "integrated_gradients";
+  method_params?: { n_steps?: number; baseline?: string };
+  tokens: TokenAttribution[];
+  all_tokens_in_order?: TokenAttribution[];
+  predicted_class: 0 | 1;
+  predicted_label: "FAKE" | "REAL";
+  confidence: number;
+}
+
+export interface GraphImportantNode {
+  node_id: number;
+  importance: number;
+  metadata?: {
+    type?: "article" | "tweet" | "retweet" | "reply" | string;
+    text?: string;
+    author?: string;
+    [k: string]: unknown;
+  };
+}
+
+export interface GraphImportantEdge {
+  source: number;
+  target: number;
+  importance: number;
+}
+
+export interface GnnExplanation {
+  method: "gnn_explainer";
+  method_params?: { epochs?: number; algorithm?: string };
+  important_nodes: GraphImportantNode[];
+  important_edges: GraphImportantEdge[];
+  n_nodes_total: number;
+  n_edges_total: number;
+  predicted_class: 0 | 1;
+  predicted_label: "FAKE" | "REAL";
+  confidence: number;
+  architecture?: string;
+  cached?: boolean;
+}
+
+export interface LlmExplanation {
+  method: "llm_reasoning" | string;
+  reasoning?: string;
+  key_indicators?: string[];
+  confidence_factors?: Array<{ name: string; value: number }>;
+  uncertainty_factors?: string[];
+}
+
+export type Explanation =
+  | NbExplanation
+  | IgExplanation
+  | GnnExplanation
+  | LlmExplanation;

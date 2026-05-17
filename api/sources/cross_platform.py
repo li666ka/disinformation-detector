@@ -142,8 +142,19 @@ def extract_keywords_from_title(title: str, max_keywords: int = 4) -> str:
         elif len(w) >= 5:
             content.append(w)
 
-    ranked = acronyms + proper + content
-    return " ".join(ranked[:max_keywords])
+    # Адаптивний вибір:
+    #   - якщо є ≥2 named entities (акроніми + TitleCase) — повертаємо їх (precision-orient):
+    #     2-3 entity-токени + 1 content-слово якщо є.
+    #   - інакше — звичайний top-N (recall-orient), щоб не повертати порожнє коли
+    #     заголовок узагалі без власних назв ("vaccine causes autism").
+    entities = acronyms + proper
+    if len(entities) >= 2:
+        result = entities[:3]
+        if content:
+            result.append(content[0])
+    else:
+        result = (acronyms + proper + content)[:max_keywords]
+    return " ".join(result)
 
 def extract_domain(url: str) -> Optional[str]:
     """example.com з https://example.com/path/article"""

@@ -8,7 +8,6 @@ import SourcesPage from "./SourcesPage";
 import DatasetsPage from "./DatasetsPage";
 import LLMPresetsPage from "./LLMPresetsPage";
 import EnsemblesPage from "./EnsemblesPage";
-import VerificationPage from "./VerificationPage";
 import api from "./api";
 import { useTheme } from "./ThemeProvider";
 import { cn } from "./lib/utils";
@@ -22,7 +21,7 @@ import { Avatar, AvatarFallback } from "./components/ui/avatar";
 import {
   Brain, FileText, Globe, Database, Sparkles,
   Boxes, LogOut, Sun, Moon, Target, Crosshair,
-  Activity, Award, Loader2, AlertTriangle, CheckCircle2, ShieldCheck,
+  Activity, Award, Loader2, AlertTriangle, CheckCircle2,
   Layers, BarChart3,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -70,7 +69,6 @@ const NAV_ITEMS = [
   { icon: Sparkles, label: "LLM пресети", tab: "llm-presets" },
   { icon: Layers, label: "Ансамблі", tab: "ensembles" },
   { icon: FileText, label: "Аналіз тексту", tab: "prediction" },
-  { icon: ShieldCheck, label: "Верифікація", tab: "verification" },
   { icon: Globe, label: "Моніторинг соцмереж", tab: "sources" },
 ];
 
@@ -146,7 +144,6 @@ function App() {
   const { theme, setTheme } = useTheme();
 
   const [activeTab, setActiveTab] = useState<string>("training");
-  const [prefilledVerifyText, setPrefilledVerifyText] = useState<string>("");
 
   // ── Training state ─────────────────────────────────────────────────────
   const [wizardConfig, setWizardConfig] = useState<TrainRequest | null>(null);
@@ -825,15 +822,7 @@ function App() {
             </div>
           )}
 
-          {activeTab === "prediction" && (
-            <AnalysisPage
-              onDeepCheckRequest={(text) => {
-                setPrefilledVerifyText(text);
-                setActiveTab("verification");
-              }}
-            />
-          )}
-          {activeTab === "verification" && <VerificationPage initialText={prefilledVerifyText} />}
+          {activeTab === "prediction" && <AnalysisPage />}
           {activeTab === "sources" && <SourcesPage />}
           {activeTab === "datasets" && <DatasetsPage />}
           {activeTab === "llm-presets" && <LLMPresetsPage />}

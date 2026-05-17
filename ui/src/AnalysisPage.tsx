@@ -37,7 +37,6 @@ import {
   Globe,
   Settings2,
   Wand2,
-  ShieldCheck,
   AlertTriangle,
   RefreshCw,
 } from "lucide-react";
@@ -70,13 +69,7 @@ const TYPE_LABELS: Record<string, string> = {
 const EXCLUDED_TYPES = new Set(["gin", "sage", "gnn"]);
 const SOURCES = ["mastodon", "bluesky", "rss"] as const;
 
-interface AnalysisPageProps {
-  onDeepCheckRequest?: (text: string) => void;
-}
-
-export default function AnalysisPage({
-  onDeepCheckRequest,
-}: AnalysisPageProps = {}) {
+export default function AnalysisPage() {
   // Models + selection
   const [models, setModels] = useState<ModelRecord[]>([]);
   const [modelId, setModelId] = useState<number | "auto">("auto");
@@ -212,12 +205,6 @@ export default function AnalysisPage({
     setMode(v as AnalyzeInputMode);
     setResult(null);
   };
-
-  // Deep-verification button — preserves existing App.tsx integration.
-  const canDeepCheck =
-    !!onDeepCheckRequest &&
-    !!result?.classification &&
-    result.classification.label !== "UNCERTAIN";
 
   return (
     <div className="space-y-6">
@@ -540,19 +527,6 @@ export default function AnalysisPage({
             </>
           )}
         </Button>
-
-        {canDeepCheck && (
-          <Button
-            variant="outline"
-            size="lg"
-            onClick={() =>
-              onDeepCheckRequest?.(result?.original_text || currentInput)
-            }
-          >
-            <ShieldCheck className="h-4 w-4 mr-2" />
-            Глибока верифікація
-          </Button>
-        )}
       </div>
 
       {/* Result / empty state */}

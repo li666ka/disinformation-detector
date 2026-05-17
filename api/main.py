@@ -26,7 +26,6 @@ from api.routers import models_router
 from api.routers import sources as sources_router
 from api.routers import llm_presets as llm_presets_router
 from api.routers import datasets as datasets_router
-from api.routers import verification as verification_router
 from api.routers import analytics as analytics_router
 from api.routers import ensembles as ensembles_router
 from api.routers import analyze_v2 as analyze_v2_router
@@ -76,7 +75,6 @@ app.include_router(models_router.router)
 app.include_router(sources_router.router)
 app.include_router(datasets_router.router)
 app.include_router(llm_presets_router.router)
-app.include_router(verification_router.router)
 app.include_router(analytics_router.router)
 app.include_router(ensembles_router.router)
 app.include_router(analyze_v2_router.router)

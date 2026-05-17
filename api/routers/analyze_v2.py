@@ -49,6 +49,14 @@ class AnalyzeV2Options(BaseModel):
         default=False,
         description="Якщо True — класифікувати extracted claim замість raw text",
     )
+    explain: bool = Field(
+        default=True,
+        description=(
+            "Запитувати local explanation моделі (NB log-odds / DistilBERT IG). "
+            "Default True — UI завжди показує ExplanationPanel якщо backend "
+            "повертає поле `explanation`."
+        ),
+    )
 
 
 class AnalyzeV2Request(BaseModel):
@@ -154,14 +162,18 @@ def _classify_with_model(
     model_id: int,
     current_user: User,
     db: Session,
+    *,
+    explain: bool = False,
 ) -> dict:
     """Класифікувати текст через existing `/analyze` handler.
 
     `analyze_text` синхронний; викликаємо напряму як звичайну функцію.
+    `explain` форвардиться → /analyze повертає `result["explanation"]`
+    для NB і DistilBERT (через Colab /explain_distilbert).
     """
     from api.main import AnalyzeRequest, analyze_text
 
-    req = AnalyzeRequest(text=text, model_id=model_id)
+    req = AnalyzeRequest(text=text, model_id=model_id, explain=explain)
     return analyze_text(request=req, current_user=current_user, db=db)
 
 
@@ -183,13 +195,29 @@ def _aggregate_spread(posts_with_results: list[dict]) -> dict:
     stance_counts = {"supports": 0, "refutes": 0, "neutral": 0}
     label_counts = {"FAKE": 0, "REAL": 0, "UNCERTAIN": 0}
     confidences: list[float] = []
+    total_claims = 0  # для статистики (один пост може мати 1-3 claims)
 
     for p in posts_with_results:
+        # ── stance: одна мітка на ПОСТ (majority серед його claims).
+        # Інакше з 20 постів × 2-3 claims виходить 50 supports → / 20 =
+        # 250% у UI (саме та "232%" що ви бачили).
         extraction = p.get("extraction") or {}
-        for claim in extraction.get("claims") or []:
-            stance = claim.get("stance", "neutral")
-            if stance in stance_counts:
-                stance_counts[stance] += 1
+        claims = extraction.get("claims") or []
+        per_post = {"supports": 0, "refutes": 0, "neutral": 0}
+        for claim in claims:
+            s = claim.get("stance", "neutral")
+            if s in per_post:
+                per_post[s] += 1
+                total_claims += 1
+        if any(per_post.values()):
+            # max-vote з пріоритетом supports > refutes > neutral на tie
+            post_stance = max(
+                ("supports", "refutes", "neutral"),
+                key=lambda s: (per_post[s], -("supports", "refutes", "neutral").index(s)),
+            )
+        else:
+            post_stance = "neutral"  # extraction нічого не знайшов → neutral
+        stance_counts[post_stance] += 1
 
         cls = p.get("classification") or {}
         label = cls.get("label", "UNCERTAIN")
@@ -228,6 +256,7 @@ def _aggregate_spread(posts_with_results: list[dict]) -> dict:
 
     return {
         "total_posts": total,
+        "total_claims": total_claims,
         "stance_distribution": stance_counts,
         "classification_distribution": label_counts,
         "majority_verdict": majority,
@@ -444,7 +473,8 @@ async def analyze_v2(
         t3 = time.time()
         try:
             classification = _classify_with_model(
-                text_to_classify, model.id, current_user, db
+                text_to_classify, model.id, current_user, db,
+                explain=req.options.explain,
             )
         except HTTPException as e:
             warnings.append(f"Classification помилка: {e.detail}")

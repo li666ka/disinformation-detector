@@ -936,6 +936,9 @@ export interface AnalyzeV2Options {
   search_sources?: string[];
   search_limit?: number;
   classify_extracted?: boolean;
+  // Default true на backend → ExplanationPanel рендериться, якщо
+  // class.explanation повертається (NB log-odds, DistilBERT IG).
+  explain?: boolean;
 }
 
 export interface AnalyzeV2Request {
@@ -983,6 +986,7 @@ export interface AnalyzeV2SimilarPost {
 
 export interface AnalyzeV2Aggregated {
   total_posts: number;
+  total_claims?: number;
   stance_distribution: {
     supports: number;
     refutes: number;

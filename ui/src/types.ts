@@ -398,9 +398,9 @@ export interface LLMParams {
 
 export type ModelParams = NBParams | DistilBERTParams | LLMParams;
 
-// ── Real-data sources (Bluesky / Mastodon / RSS) ────────────────────────────
+// ── Real-data sources (Bluesky / Mastodon) ──────────────────────────────────
 
-export type SourceType = "bluesky" | "mastodon" | "rss";
+export type SourceType = "bluesky" | "mastodon";
 
 export interface NewsItem {
   id: string;

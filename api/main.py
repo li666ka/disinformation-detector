@@ -408,14 +408,64 @@ def analyze_text(
         if not record.model_path:
             raise HTTPException(status_code=400, detail="GNN модель не має model_path")
 
-        # Простий випадок: тільки article_text. Tweets/retweets/replies можна додати
-        # пізніше, якщо UI підтримуватиме контекст соц.мережі.
+        # Phase 2: будуємо propagation graph через InferenceContextBuilder.
+        # `analyze_text` — sync FastAPI handler (запускається у thread pool),
+        # тому asyncio.run() тут безпечний (немає running event loop у потоці).
+        import asyncio as _asyncio
+        from api.inference_context import (
+            build_inference_context,
+            derive_requirements,
+        )
+
+        if record.inference_requirements:
+            try:
+                inference_reqs = json.loads(record.inference_requirements)
+            except (TypeError, ValueError):
+                inference_reqs = derive_requirements(
+                    model_type=mtype, pipeline_type=record.pipeline_type,
+                )
+        else:
+            inference_reqs = derive_requirements(
+                model_type=mtype, pipeline_type=record.pipeline_type,
+            )
+
+        try:
+            context = _asyncio.run(build_inference_context(
+                text=request.text, inference_requirements=inference_reqs,
+            ))
+        except Exception as e:
+            raise HTTPException(
+                status_code=502,
+                detail=f"Не вдалося побудувати propagation context: {e}",
+            )
+
+        graph_inputs = context.get("graph_data") or {}
+        if not graph_inputs.get("tweets"):
+            # Degraded — без пов'язаних постів GIN/SAGE нема що inference'ити.
+            return {
+                "label": "UNKNOWN",
+                "confidence": 0.0,
+                "probability": 0.5,
+                "error": "no_propagation_graph",
+                "message": (
+                    "Не знайдено релевантних постів у соцмережах. GIN/SAGE "
+                    "моделі потребують каскаду поширення для inference."
+                ),
+                "inference_context": {
+                    "claim": context.get("claim"),
+                    "metadata": context.get("metadata"),
+                },
+            }
+
         gnn_payload: dict = {
-            "article_text": request.text,
             "model_path": record.model_path,
-            "tweets": [],
-            "retweets": [],
-            "replies": [],
+            "graph_inputs": {
+                "article_text": graph_inputs["article_text"],
+                "tweets": graph_inputs["tweets"],
+                "retweets": graph_inputs["retweets"],
+                "replies": graph_inputs["replies"],
+            },
+            "explain": bool(request.explain),
         }
         try:
             resp = requests.post(
@@ -425,16 +475,28 @@ def analyze_text(
             )
             if resp.status_code == 200:
                 data = resp.json()
-                prob = data.get("proba_fake", 0.5)
-                return {
+                prob = data.get("probability", data.get("proba_fake", 0.5))
+                result: dict = {
                     "label": data["label"],
                     "confidence": data.get("confidence", abs(prob - 0.5) * 2),
                     "probability": prob,
-                    "graph_size": data.get("graph_size"),
-                    "graph_edges": data.get("graph_edges"),
+                    "graph_stats": data.get("graph_stats") or {
+                        "n_nodes": data.get("graph_size"),
+                        "n_edges": (data.get("graph_edges") or 0) * 2,
+                    },
                     "architecture": data.get("architecture"),
+                    "inference_context": {
+                        "claim": context.get("claim"),
+                        "propagation_stats": (graph_inputs.get("metadata") or {}),
+                        "metadata": context.get("metadata"),
+                    },
                 }
-            raise HTTPException(status_code=502, detail=f"Colab error: {resp.text}")
+                if "explanation" in data:
+                    result["explanation"] = data["explanation"]
+                if "explanation_error" in data:
+                    result["explanation_error"] = data["explanation_error"]
+                return result
+            raise HTTPException(status_code=502, detail=f"Colab error: {resp.text[:300]}")
         except requests.exceptions.ConnectionError:
             raise HTTPException(status_code=503, detail="Colab недоступний")
 

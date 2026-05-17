@@ -136,6 +136,12 @@ class ModelRecord(Base):
     # Який split-набір використано при тренуванні: NULL = auto/unknown,
     # "in_domain" / "cross_domain" / "mixed" — фіксований split із splits_<name>/.
     splits_used = Column(String, nullable=True, default=None)
+    # JSON dict що каже /analyze pipeline'у які stages потрібні до inference:
+    # {claim_extraction, social_search:{enabled,sources,max_posts,lookback_days},
+    #  social_aggregates:[...], graph_construction:{enabled,...}}.
+    # Заповнюється при створенні моделі (див. api.inference_context.derive_requirements)
+    # або через scripts/backfill_inference_requirements.py для legacy записів.
+    inference_requirements = Column(Text, nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 
@@ -188,6 +194,7 @@ def _run_sqlite_migrations():
         ("models", "splits_used", "TEXT"),
         ("models", "dataset_id", "INTEGER"),
         ("models", "predictions_json", "TEXT"),
+        ("models", "inference_requirements", "TEXT"),
     ]
     with engine.begin() as conn:
         for table, column, coltype in migrations:

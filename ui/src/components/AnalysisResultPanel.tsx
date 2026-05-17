@@ -11,6 +11,7 @@ import {
   ShieldCheck,
   ExternalLink,
   Clock,
+  Network,
 } from "lucide-react";
 import { cn } from "../lib/utils";
 import { ExplanationPanel, type ExplanationModelType } from "./ExplanationPanel";
@@ -22,6 +23,7 @@ import type {
   AnalyzeV2Response,
   AnalyzeV2SimilarPost,
   FactCheckResult,
+  InferenceContext,
   NewsItem,
 } from "../types";
 
@@ -98,6 +100,10 @@ export function AnalysisResultPanel({ result }: { result: AnalyzeV2Response }) {
       )}
 
       {result.fact_check && <FactCheckCard factCheck={result.fact_check} />}
+
+      {result.inference_context && (
+        <InferenceContextCard context={result.inference_context} />
+      )}
 
       {result.aggregated && (
         <AggregatedSpreadCard
@@ -550,4 +556,91 @@ function _resolveExplanationModelType(
   }
   if (Array.isArray(explanation?.important_nodes)) return "gin";
   return "llm";
+}
+
+
+// ── InferenceContextBuilder (Phase 1) ────────────────────────────────────
+
+function InferenceContextCard({ context }: { context: InferenceContext }) {
+  const meta = context.metadata || {};
+  const warnings = meta.warnings || [];
+  const fewPosts = warnings.find((w) => w.startsWith("few_posts_found"));
+  const placeholder = warnings.includes("graph_construction_phase1_placeholder");
+  const aggregates = context.aggregates || {};
+  const nPosts = meta.n_posts_found ?? 0;
+
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <CardTitle className="text-base flex items-center gap-2">
+          <Network className="h-4 w-4 text-indigo-600" />
+          Inference context
+          {meta.sources_used && meta.sources_used.length > 0 && (
+            <Badge variant="outline" className="text-[10px] ml-1">
+              {meta.sources_used.join(" · ")}
+            </Badge>
+          )}
+          {meta.build_time_ms != null && (
+            <span className="text-xs text-muted-foreground ml-auto font-mono">
+              {meta.build_time_ms} ms
+            </span>
+          )}
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {context.claim && (
+          <div>
+            <div className="text-xs text-muted-foreground">Витягнутий claim</div>
+            <p className="text-sm font-medium leading-snug">«{context.claim}»</p>
+          </div>
+        )}
+
+        <div className="text-sm">
+          Пов'язаних постів: <strong>{nPosts}</strong>
+        </div>
+
+        {Object.keys(aggregates).length > 0 && (
+          <div>
+            <div className="text-xs font-medium text-muted-foreground mb-1.5">
+              Social aggregates:
+            </div>
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-1 text-xs">
+              {Object.entries(aggregates).map(([k, v]) => (
+                <div
+                  key={k}
+                  className="flex justify-between border rounded px-2 py-1 bg-muted/30"
+                >
+                  <span className="font-mono truncate">{k}</span>
+                  <span className="font-mono tabular-nums text-muted-foreground">
+                    {Number(v).toFixed(2)}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {fewPosts && (
+          <Alert>
+            <AlertTriangle className="h-4 w-4" />
+            <AlertDescription className="text-sm">
+              Знайдено мало релевантних постів. Передбачення моделі з
+              social/graph features матиме низьку надійність — потрібен
+              ширший контекст у соцмережах.
+            </AlertDescription>
+          </Alert>
+        )}
+
+        {placeholder && (
+          <Alert>
+            <AlertTriangle className="h-4 w-4" />
+            <AlertDescription className="text-sm">
+              GIN/SAGE інтеграція — Phase 1 placeholder. Граф для inference
+              ще не будується; модель отримує текст без cascade structure.
+            </AlertDescription>
+          </Alert>
+        )}
+      </CardContent>
+    </Card>
+  );
 }

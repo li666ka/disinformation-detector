@@ -1003,6 +1003,20 @@ export interface AnalyzeV2Aggregated {
   spread_warning?: string | null;
 }
 
+export interface InferenceContext {
+  text: string;
+  claim?: string | null;
+  related_posts?: NewsItem[] | null;
+  aggregates?: Record<string, number> | null;
+  graph_data?: Record<string, unknown> | null;
+  metadata?: {
+    build_time_ms?: number;
+    sources_used?: string[];
+    n_posts_found?: number;
+    warnings?: string[];
+  };
+}
+
 export interface AnalyzeV2Response {
   input_mode: AnalyzeInputMode;
   original_text: string;
@@ -1014,6 +1028,7 @@ export interface AnalyzeV2Response {
   fact_check?: FactCheckResult | null;
   similar_posts?: AnalyzeV2SimilarPost[] | null;
   aggregated?: AnalyzeV2Aggregated | null;
+  inference_context?: InferenceContext | null;
   timing_ms: Record<string, number>;
   warnings: string[];
 }

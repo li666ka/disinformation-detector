@@ -88,6 +88,11 @@ class AnalyzeV2Response(BaseModel):
     similar_posts: Optional[list[dict]] = None
     aggregated: Optional[dict] = None
 
+    # InferenceContextBuilder (Phase 1) — для моделей з social/graph deps
+    # ({claim, n_related_posts, aggregates, metadata}). None коли модель
+    # text-only, або коли inference_requirements не виставлені.
+    inference_context: Optional[dict] = None
+
     timing_ms: dict = Field(default_factory=dict)
     warnings: list[str] = Field(default_factory=list)
 
@@ -425,6 +430,41 @@ async def analyze_v2(
             warnings.append(f"Extraction помилка: {e}")
         timings["extraction_ms"] = int((time.time() - t2) * 1000)
 
+    # ── Step 2b: InferenceContextBuilder (Phase 1) ──
+    # Для моделей з social/graph requirements (NB-aggregated, GIN, SAGE)
+    # збагачуємо контекст постами з Bluesky/Mastodon + соц-агрегатами.
+    # Text-only моделі (NB-article, DistilBERT, LLM) пропускаються.
+    inference_context: Optional[dict] = None
+    inference_reqs_raw = getattr(model, "inference_requirements", None)
+    if inference_reqs_raw:
+        try:
+            import json as _json
+            inference_reqs = _json.loads(inference_reqs_raw)
+        except (TypeError, ValueError):
+            inference_reqs = None
+    else:
+        inference_reqs = None
+
+    from api.inference_context import build_inference_context, needs_context
+    if needs_context(inference_reqs):
+        t_ctx = time.time()
+        try:
+            inference_context = await build_inference_context(
+                text=original_text,
+                inference_requirements=inference_reqs or {},
+            )
+            warnings.extend(
+                (inference_context.get("metadata") or {}).get("warnings") or []
+            )
+        except Exception as e:
+            logger.warning(f"inference_context build failed: {e}")
+            warnings.append(f"inference_context_failed: {e}")
+        timings["inference_context_ms"] = int((time.time() - t_ctx) * 1000)
+        # NB: payload для inference моделей зараз НЕ містить aggregates/graph —
+        # це Phase 2 (треба міняти Colab /predict_nb та /predict_gnn signature
+        # щоб приймати context). Phase 1 — лише attach до response, щоб UI
+        # показав witness що збагачення відбулось.
+
     # ── Step 3: choose what to classify ──
     # extracted_claim — перший claim, якщо є (показуємо у UI навіть без fallback)
     extracted_claim: Optional[str] = None
@@ -543,6 +583,7 @@ async def analyze_v2(
         fact_check=fact_check,
         similar_posts=similar_posts,
         aggregated=aggregated,
+        inference_context=inference_context,
         timing_ms=timings,
         warnings=warnings,
     )

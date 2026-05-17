@@ -117,7 +117,10 @@ class MastodonSource(BaseNewsSource):
         def _sync():
             client = self._get_client()
             try:
-                result = client.search_v2(q=url, resolve=True, limit=1)
+                # Mastodon.py `search_v2` не приймає `limit` (це search через
+                # accounts/statuses/hashtags разом; обмежується самим API).
+                # Беремо перший status зі статичного списку.
+                result = client.search_v2(q=url, resolve=True)
                 statuses = result.get("statuses", []) if result else []
                 return statuses[0] if statuses else None
             except Exception as e:
@@ -202,7 +205,7 @@ class MastodonSource(BaseNewsSource):
             def _sync():
                 client = self._get_client()
                 try:
-                    result = client.search_v2(q=post_id, resolve=True, limit=1)
+                    result = client.search_v2(q=post_id, resolve=True)
                     statuses = result.get("statuses", []) if result else []
                     if statuses:
                         return str(statuses[0].get("id"))

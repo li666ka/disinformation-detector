@@ -470,6 +470,24 @@ export default function AnalysisPage() {
                   ` · F1=${selectedModel.f1_score.toFixed(3)}`}
               </p>
             )}
+
+            {/* Distribution-shift warning для GIN/SAGE: модель тренована
+                на FakeNewsNet Twitter cascades (2017-2018), а inference йде
+                на live Bluesky/Mastodon → результати інтерпретувати як
+                архітектурну демонстрацію. */}
+            {selectedModel
+              && ["gin", "sage", "gnn"].includes(selectedModel.model_type) && (
+              <Alert className="mt-3">
+                <AlertTriangle className="h-4 w-4" />
+                <AlertDescription className="text-xs">
+                  <strong>Експериментальний режим.</strong> Graph-моделі
+                  натреновано на каскадах FakeNewsNet (Twitter 2017-2018).
+                  Inference на live даних Bluesky/Mastodon має distribution
+                  shift — результати слід інтерпретувати як архітектурну
+                  демонстрацію, не як надійний вердикт.
+                </AlertDescription>
+              </Alert>
+            )}
           </div>
 
           {/* Options */}

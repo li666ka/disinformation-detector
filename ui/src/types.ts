@@ -1003,12 +1003,24 @@ export interface AnalyzeV2Aggregated {
   spread_warning?: string | null;
 }
 
+export interface PropagationStats {
+  n_tweets?: number;
+  n_retweets?: number;
+  n_replies?: number;
+  synthetic_retweets?: number;
+  platforms?: string[];
+  warnings?: string[];
+}
+
 export interface InferenceContext {
-  text: string;
+  text?: string;
   claim?: string | null;
   related_posts?: NewsItem[] | null;
   aggregates?: Record<string, number> | null;
+  // Phase 2: справжні propagation inputs (article+tweets+retweets+replies)
   graph_data?: Record<string, unknown> | null;
+  // Узагальнена статистика по graph_data — для UI без розпакування деталей
+  propagation_stats?: PropagationStats | null;
   metadata?: {
     build_time_ms?: number;
     sources_used?: string[];

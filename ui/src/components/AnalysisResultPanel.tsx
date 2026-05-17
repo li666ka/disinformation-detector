@@ -569,6 +569,12 @@ function InferenceContextCard({ context }: { context: InferenceContext }) {
   const aggregates = context.aggregates || {};
   const nPosts = meta.n_posts_found ?? 0;
 
+  // Phase 2: propagation_stats може бути або вкладеним у context.graph_data.metadata,
+  // або плоским полем (FastAPI GIN branch шле обидва шляхи).
+  const propStats: any = (context as any).propagation_stats
+    ?? ((context.graph_data as any)?.metadata as any)
+    ?? null;
+
   return (
     <Card>
       <CardHeader className="pb-3">
@@ -617,6 +623,32 @@ function InferenceContextCard({ context }: { context: InferenceContext }) {
                 </div>
               ))}
             </div>
+          </div>
+        )}
+
+        {propStats && (propStats.n_tweets || propStats.n_replies || propStats.n_retweets) && (
+          <div>
+            <div className="text-xs font-medium text-muted-foreground mb-1.5">
+              Граф поширення:
+            </div>
+            <ul className="text-xs space-y-0.5 pl-3 list-disc">
+              <li>1 центральна стаття</li>
+              <li><strong>{propStats.n_tweets ?? 0}</strong> твітів</li>
+              <li>
+                <strong>{propStats.n_retweets ?? 0}</strong> retweet-вузлів
+                {propStats.synthetic_retweets ? (
+                  <span className="text-muted-foreground">
+                    {" "}({propStats.synthetic_retweets} синтетичних)
+                  </span>
+                ) : null}
+              </li>
+              <li><strong>{propStats.n_replies ?? 0}</strong> відповідей</li>
+              {propStats.platforms && propStats.platforms.length > 0 && (
+                <li className="text-muted-foreground">
+                  Платформи: {propStats.platforms.join(", ")}
+                </li>
+              )}
+            </ul>
           </div>
         )}
 

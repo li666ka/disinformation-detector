@@ -182,20 +182,27 @@ async def build_inference_context(
             context["related_posts"], requested_features=agg_features,
         )
 
-    # ── 2d. Graph construction (Phase 1 = placeholder) ───────────────
+    # ── 2d. Graph construction (Phase 2 — real propagation inputs) ───
     graph_cfg = inference_requirements.get("graph_construction") or {}
     if graph_cfg.get("enabled"):
-        context["graph_data"] = {
-            "placeholder": True,
-            "n_nodes": len(context["related_posts"] or []) + 1,
-            "n_edges": 0,
-            "note": (
-                "Phase 1 placeholder. Real PyG Data construction для GIN/SAGE "
-                "буде у наступному промті (потребує node/edge feature mapping "
-                "з FakeNewsNet schema на Mastodon/Bluesky)."
-            ),
-        }
-        warnings.append("graph_construction_phase1_placeholder")
+        try:
+            propagation = await _build_propagation_inputs(
+                article_text=text,
+                related_posts=context["related_posts"] or [],
+                top_k_for_thread=int(graph_cfg.get("top_k_for_thread", 5)),
+                max_replies_per_post=int(graph_cfg.get("max_replies_per_post", 10)),
+            )
+            context["graph_data"] = propagation
+            warnings.extend(
+                (propagation.get("metadata") or {}).get("warnings") or []
+            )
+        except Exception as e:
+            logger.warning(f"_build_propagation_inputs failed: {e}")
+            warnings.append(f"graph_construction_failed: {e}")
+            context["graph_data"] = {
+                "article_text": text, "tweets": [], "retweets": [], "replies": [],
+                "metadata": {"warnings": [str(e)]},
+            }
 
     context["metadata"] = {
         "build_time_ms": int((time.time() - t0) * 1000),
@@ -285,6 +292,180 @@ def _compute_social_aggregates(posts: list, *, requested_features: list[str]) ->
             continue
         result[feat] = float(np.mean(vals)) if vals else 0.0
     return result
+
+
+async def _build_propagation_inputs(
+    *,
+    article_text: str,
+    related_posts: list,
+    top_k_for_thread: int = 5,
+    max_replies_per_post: int = 10,
+) -> dict:
+    """Перетворити `related_posts` у структуру для `build_inference_graph`.
+
+    Структура повторює FakeNewsNet schema:
+      article (root) ← tweets ← retweets / replies
+
+    Для топ-K твітів fetch'имо `get_post_details` (Bluesky/Mastodon API),
+    щоб дістати replies + reposted_by → справжні reply-вузли + synthetic
+    retweet-вузли (текст оригіналу, бо API не дає окремого тексту для
+    reposter — це pointer на original).
+
+    Edge cases:
+      • API не повертає reposters (без auth у Mastodon) але дає `reposts_total`
+        → створюємо `min(reposts_total, 10)` placeholder-нод з reason у metadata.
+      • `text` поля пустого reply → skip.
+      • source без `get_post_details` → warning, тількі tweet-вузли без потомків.
+
+    Returns:
+      {article_text, tweets:[{text,platform,post_id,metadata}],
+       retweets:[{text,original_tweet_idx,metadata}],
+       replies:[{text,parent_tweet_idx,parent_reply_idx,metadata}],
+       metadata:{n_tweets, n_retweets, n_replies, synthetic_retweets,
+                 platforms, warnings}}
+    """
+    warnings: list[str] = []
+
+    def _get(p, key, default=None):
+        # Унифікований accessor для NewsItem або dict (Phase 1 робить to_dict()).
+        if isinstance(p, dict):
+            v = p.get(key, default)
+        else:
+            v = getattr(p, key, default)
+        return default if v is None else v
+
+    # ── 1) Tweets з related_posts (вже відфільтровані за relevance у Phase 1) ──
+    tweets: list[dict] = []
+    for p in related_posts[: top_k_for_thread * 3]:
+        text_val = _get(p, "text", "")
+        if not text_val:
+            continue
+        tweets.append({
+            "text": text_val,
+            "platform": _get(p, "source", "unknown"),
+            "post_id": _get(p, "id", ""),
+            "metadata": {
+                "author_handle": _get(p, "author_handle"),
+                "author_followers": _get(p, "author_followers_count"),
+                "like_count": int(_get(p, "likes_count", 0) or 0),
+                "repost_count": int(_get(p, "reposts_count", 0) or 0),
+                "reply_count": int(_get(p, "replies_count", 0) or 0),
+            },
+        })
+
+    if not tweets:
+        return {
+            "article_text": article_text,
+            "tweets": [], "retweets": [], "replies": [],
+            "metadata": {
+                "n_tweets": 0, "n_retweets": 0, "n_replies": 0,
+                "synthetic_retweets": 0, "platforms": [],
+                "warnings": ["no_tweets_found"],
+            },
+        }
+
+    # ── 2) Для top-K — fetch details (replies + reposted_by) ──
+    retweets: list[dict] = []
+    replies: list[dict] = []
+    synthetic_retweet_count = 0
+
+    for tweet_idx, tw in enumerate(tweets[:top_k_for_thread]):
+        platform = tw["platform"]
+        post_id = tw["post_id"]
+        if not post_id:
+            continue
+
+        src = get_source(platform)
+        if src is None or not hasattr(src, "get_post_details"):
+            warnings.append(f"{platform}_no_post_details_method")
+            continue
+
+        try:
+            details = await src.get_post_details(
+                post_id,
+                max_replies=max_replies_per_post,
+                max_likers=0,
+                max_reposters=20,
+            )
+        except Exception as e:
+            logger.warning(f"get_post_details failed {platform}:{post_id}: {e}")
+            warnings.append(f"{platform}_fetch_failed")
+            continue
+
+        if details is None:
+            continue
+
+        # Replies (справжні текстові вузли) → parent_tweet_idx
+        for reply in (details.replies or [])[:max_replies_per_post]:
+            reply_text = (getattr(reply, "text", None) or "").strip()
+            if not reply_text:
+                continue
+            author = getattr(reply, "author", None)
+            replies.append({
+                "text": reply_text,
+                "parent_tweet_idx": tweet_idx,
+                "parent_reply_idx": None,
+                "metadata": {
+                    "platform": platform,
+                    "author_handle": getattr(author, "handle", None) if author else None,
+                },
+            })
+
+        # Reposted_by → synthetic retweets з текстом оригіналу.
+        # NewsItem reposters — це UserProfile; текст не дається бо repost у
+        # Bluesky/Mastodon — це pointer на оригінал.
+        reposters = details.reposted_by or []
+        for reposter in reposters[:20]:
+            retweets.append({
+                "text": tw["text"],
+                "original_tweet_idx": tweet_idx,
+                "metadata": {
+                    "platform": platform,
+                    "reposter_handle": getattr(reposter, "handle", None) if reposter else None,
+                    "is_synthetic": True,
+                },
+            })
+            synthetic_retweet_count += 1
+
+        # Якщо reposted_by пусто, але fetched_limits дає reposts_total —
+        # створюємо anonymous placeholder retweets (cap=10).
+        if not reposters and getattr(details, "fetched_limits", None):
+            reposts_total = (details.fetched_limits or {}).get("reposts_total")
+            if reposts_total and reposts_total > 0:
+                n_synth = min(int(reposts_total), 10)
+                for _ in range(n_synth):
+                    retweets.append({
+                        "text": tw["text"],
+                        "original_tweet_idx": tweet_idx,
+                        "metadata": {
+                            "platform": platform,
+                            "reposter_handle": None,
+                            "is_synthetic": True,
+                            "reason": "count_only_no_user_list",
+                        },
+                    })
+                    synthetic_retweet_count += 1
+                warnings.append(
+                    f"{platform}_synthetic_retweets_from_count_only: "
+                    f"{n_synth} placeholder reposter vertices added"
+                )
+
+    platforms = sorted({t["platform"] for t in tweets})
+
+    return {
+        "article_text": article_text,
+        "tweets": tweets,
+        "retweets": retweets,
+        "replies": replies,
+        "metadata": {
+            "n_tweets": len(tweets),
+            "n_retweets": len(retweets),
+            "n_replies": len(replies),
+            "synthetic_retweets": synthetic_retweet_count,
+            "platforms": platforms,
+            "warnings": warnings,
+        },
+    }
 
 
 def invalidate_cache() -> None:

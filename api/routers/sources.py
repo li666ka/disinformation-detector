@@ -4,7 +4,7 @@ Router для джерел даних: пошук, свіжі пости, fetch 
 
 Endpoints:
 - GET  /sources/search?query=...&sources=bluesky,mastodon&limit=20
-- GET  /sources/recent?sources=bluesky,rss&limit=20
+- GET  /sources/recent?sources=bluesky,mastodon&limit=20
 - POST /sources/fetch-url  { "url": "https://bsky.app/..." }
 """
 from __future__ import annotations
@@ -58,8 +58,8 @@ class PostDetailsResponse(BaseModel):
 # ── Helpers ───────────────────────────────────────────────────────────────
 
 def _parse_sources_param(sources_csv: str) -> list[str]:
-    """Розпарсити "bluesky,mastodon,rss" → ["bluesky", "mastodon", "rss"]."""
-    valid = {"bluesky", "mastodon", "rss"}
+    """Розпарсити "bluesky,mastodon" → ["bluesky", "mastodon"]."""
+    valid = {"bluesky", "mastodon"}
     requested = [s.strip().lower() for s in sources_csv.split(",") if s.strip()]
     filtered = [s for s in requested if s in valid]
 
@@ -134,7 +134,7 @@ def _items_to_dicts(items: list[NewsItem], limit: int) -> list[dict]:
 @router.get("/search", response_model=SourceSearchResponse)
 async def search_posts(
     query: str = Query(..., min_length=1, max_length=200),
-    sources: str = Query(..., description="Comma-separated: bluesky,mastodon,rss"),
+    sources: str = Query(..., description="Comma-separated: bluesky,mastodon"),
     limit: int = Query(20, ge=1, le=100),
     current_user: User = Depends(get_current_user),
 ):
@@ -215,7 +215,7 @@ async def search_posts(
 
 @router.get("/recent", response_model=SourceSearchResponse)
 async def get_recent_posts(
-    sources: str = Query(..., description="Comma-separated: bluesky,mastodon,rss"),
+    sources: str = Query(..., description="Comma-separated: bluesky,mastodon"),
     limit: int = Query(20, ge=1, le=100),
     current_user: User = Depends(get_current_user),
 ):
@@ -252,27 +252,14 @@ async def fetch_by_url(
     if not url:
         raise HTTPException(status_code=400, detail="URL не може бути порожнім")
 
-    all_sources = get_all_sources()
-
-    # Пріоритет: Bluesky → Mastodon → RSS (RSS як fallback для будь-якого URL)
-    # Це важливо, бо RSS.can_handle_url() повертає True для будь-якого HTTP URL.
-    ordered_sources = sorted(
-        all_sources,
-        key=lambda s: 0 if s.source_name != "rss" else 1,
-    )
-
-    for src in ordered_sources:
+    for src in get_all_sources():
         if not src.can_handle_url(url):
             continue
         try:
             item = await src.fetch_by_url(url)
         except SourceError as e:
             logger.warning(f"fetch_by_url: {src.source_name} failed: {e}")
-            # Якщо конкретне джерело впевнено належить URL-у, але впало —
-            # повертаємо 502. Для RSS fallback — продовжуємо перебір.
-            if src.source_name != "rss":
-                raise HTTPException(status_code=502, detail=str(e.message)) from e
-            continue
+            raise HTTPException(status_code=502, detail=str(e.message)) from e
         if item is not None:
             return item.to_dict()
 

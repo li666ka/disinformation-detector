@@ -1,0 +1,14 @@
+{
+	"folders": [
+		{
+			"path": "."
+		},
+		{
+			"path": "../diploma-ml-server"
+		},
+		{
+			"path": "../temp"
+		}
+	],
+	"settings": {}
+}

@@ -4,7 +4,7 @@ POST /analyze/v2
 
 Input modes:
   - "text":         raw text/article
-  - "url":          Mastodon/Bluesky/RSS URL → fetch first
+  - "url":          Mastodon/Bluesky URL → fetch first
   - "claim_search": claim → search similar posts → batch analyze → aggregate spread
 
 Note: окремий від існуючого `POST /analyze` (той — однокроковий classify-only,
@@ -42,7 +42,7 @@ class AnalyzeV2Options(BaseModel):
     classify: bool = Field(default=True, description="Run classifier")
     fact_check: bool = Field(default=False, description="Google Fact Check")
     search_sources: list[str] = Field(
-        default_factory=lambda: ["mastodon", "bluesky", "rss"]
+        default_factory=lambda: ["mastodon", "bluesky"]
     )
     search_limit: int = Field(default=20, ge=1, le=50)
     classify_extracted: bool = Field(
@@ -285,9 +285,9 @@ async def _search_and_classify_similar(
     """
     from api.routers.sources import search_posts as search_endpoint
 
-    valid_sources = [s for s in sources if s in {"bluesky", "mastodon", "rss"}]
+    valid_sources = [s for s in sources if s in {"bluesky", "mastodon"}]
     if not valid_sources:
-        valid_sources = ["bluesky", "mastodon", "rss"]
+        valid_sources = ["bluesky", "mastodon"]
 
     try:
         search_result = await search_endpoint(

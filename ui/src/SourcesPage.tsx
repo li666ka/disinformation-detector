@@ -6,7 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "./components/ui/card";
 import { Input } from "./components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./components/ui/select";
 import { Checkbox } from "./components/ui/checkbox";
-import { Search, Link, Clock, Globe, Loader2, Rss } from "lucide-react";
+import { Search, Link, Clock, Globe, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import PostCard from "./PostCard";
 import type { ModelRecord, NewsItem, ClassifiedPost, SourceType, FactCheckResult } from "./types";
@@ -45,12 +45,6 @@ const SOURCE_CONFIG: Record<SourceType, { label: string; icon: any; color: strin
     color: "text-indigo-600 dark:text-indigo-400",
     bg: "bg-indigo-50 dark:bg-indigo-950/30 border-indigo-200 dark:border-indigo-800",
   },
-  rss: {
-    label: "RSS",
-    icon: Rss,
-    color: "text-orange-600 dark:text-orange-400",
-    bg: "bg-orange-50 dark:bg-orange-950/30 border-orange-200 dark:border-orange-800",
-  },
 };
 
 export default function SourcesPage() {
@@ -62,7 +56,7 @@ export default function SourcesPage() {
   const [posts, setPosts] = useState<ClassifiedPost[]>([]);
   const [loadingPosts, setLoadingPosts] = useState<boolean>(false);
   const [query, setQuery] = useState<string>("");
-  const [sources, setSources] = useState<Set<SourceType>>(new Set<SourceType>(["bluesky", "mastodon", "rss"]));
+  const [sources, setSources] = useState<Set<SourceType>>(new Set<SourceType>(["bluesky", "mastodon"]));
   const [limit, setLimit] = useState<number>(20);
   const [postUrl, setPostUrl] = useState<string>("");
   const [classifyingIds, setClassifyingIds] = useState<Set<string>>(new Set());
@@ -79,7 +73,7 @@ export default function SourcesPage() {
   useEffect(() => {
     api.get("/models")
       .then(({ data }) => {
-        // Bluesky/RSS/Mastodon — single-post inference, фільтруємо article-level
+        // Bluesky/Mastodon — single-post inference, фільтруємо article-level
         const tweetLevel = (data as ModelRecord[]).filter(
           (m) => m.pipeline_type !== "article",
         );
@@ -256,7 +250,7 @@ export default function SourcesPage() {
     <div className="space-y-6">
       <div>
         <h2 className="text-2xl font-bold tracking-tight">Реальні дані</h2>
-        <p className="text-muted-foreground">Аналізуйте пости з соціальних мереж та RSS-стрічок</p>
+        <p className="text-muted-foreground">Аналізуйте пости з соціальних мереж (Bluesky, Mastodon)</p>
       </div>
 
       {/* Mode selector */}
@@ -377,7 +371,7 @@ export default function SourcesPage() {
           </CardHeader>
           <CardContent className="space-y-3">
             <p className="text-xs text-muted-foreground">
-              Підтримуються: Bluesky, Mastodon та RSS-статті
+              Підтримуються: Bluesky та Mastodon
             </p>
             <div className="flex gap-2">
               <Input

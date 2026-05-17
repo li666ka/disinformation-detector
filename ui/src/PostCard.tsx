@@ -6,7 +6,7 @@ import { Badge } from "./components/ui/badge";
 import {
   AlertTriangle, CheckCircle2, HelpCircle, ExternalLink, Loader2,
   RefreshCw, Heart, Repeat2, MessageCircle, ShieldCheck, Users,
-  Clock, Globe, Bot, Info, Rss, Brain,
+  Clock, Globe, Bot, Info, Brain,
 } from "lucide-react";
 import type { ClassifiedPost } from "./types";
 import { FactCheckBadge } from "./components/FactCheckBadge";
@@ -25,7 +25,6 @@ interface PostCardProps {
 const SOURCE_STYLES: Record<string, string> = {
   bluesky: "bg-sky-100 text-sky-700 dark:bg-sky-950 dark:text-sky-300",
   mastodon: "bg-violet-100 text-violet-700 dark:bg-violet-950 dark:text-violet-300",
-  rss: "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300",
 };
 
 const BlueskyIcon = ({ className }: { className?: string }) => (
@@ -46,8 +45,6 @@ function SourceIcon({ source }: { source: string }) {
       return <BlueskyIcon className="h-3 w-3 shrink-0" />;
     case "mastodon":
       return <MastodonIcon className="h-3 w-3 shrink-0" />;
-    case "rss":
-      return <Rss className="h-3 w-3 shrink-0" />;
     default:
       return <Globe className="h-3 w-3 shrink-0" />;
   }
@@ -96,7 +93,7 @@ export default function PostCard({
   // Warning signals for the post author
   const hasYoungAuthor = post.author_account_age_days != null && post.author_account_age_days < 30;
   const hasLowFollowers =
-    post.author_followers_count != null && post.author_followers_count < 50 && post.source !== "rss";
+    post.author_followers_count != null && post.author_followers_count < 50;
 
   return (
     <Card className={cn("mb-3", hasTrustSignals && "border-emerald-200 dark:border-emerald-900/50")}>
@@ -304,14 +301,14 @@ export default function PostCard({
           )}
 
           {/* Details button (only for social posts, not RSS) */}
-          {onDetails && post.source !== "rss" && (
+          {onDetails && (
             <Button variant="outline" size="sm" onClick={onDetails} className="gap-1.5">
               <Users className="h-3.5 w-3.5" />
               Деталі
             </Button>
           )}
 
-          {/* Verify button (useful for RSS or news-like social posts) */}
+          {/* Verify button (useful for news-like social posts) */}
           {onVerify && (
             <Button variant="outline" size="sm" onClick={onVerify} className="gap-1.5">
               <ShieldCheck className="h-3.5 w-3.5" />

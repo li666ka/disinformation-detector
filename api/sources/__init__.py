@@ -1,6 +1,6 @@
 # api/sources/__init__.py
 """
-Модуль джерел даних: Bluesky, Mastodon, RSS.
+Модуль джерел даних: Bluesky, Mastodon.
 
 Усі адаптери мають однаковий інтерфейс BaseNewsSource і повертають
 NewsItem у нормалізованому форматі.
@@ -8,7 +8,6 @@ NewsItem у нормалізованому форматі.
 from .base import BaseNewsSource, NewsItem, SourceError
 from .bluesky_client import BlueskySource
 from .mastodon_client import MastodonSource
-from .rss_client import RSSSource
 
 __all__ = [
     "BaseNewsSource",
@@ -16,7 +15,6 @@ __all__ = [
     "SourceError",
     "BlueskySource",
     "MastodonSource",
-    "RSSSource",
 ]
 
 
@@ -25,10 +23,7 @@ _SOURCES: dict[str, BaseNewsSource] = {}
 
 
 def get_source(name: str) -> BaseNewsSource:
-    """
-    Отримати instance джерела за іменем.
-    Кидає ValueError для невідомих імен.
-    """
+    """Отримати instance джерела за іменем. ValueError для невідомих."""
     name = name.lower().strip()
     if name in _SOURCES:
         return _SOURCES[name]
@@ -37,8 +32,6 @@ def get_source(name: str) -> BaseNewsSource:
         _SOURCES[name] = BlueskySource()
     elif name == "mastodon":
         _SOURCES[name] = MastodonSource()
-    elif name == "rss":
-        _SOURCES[name] = RSSSource()
     else:
         raise ValueError(f"Unknown source: {name}")
 
@@ -47,4 +40,4 @@ def get_source(name: str) -> BaseNewsSource:
 
 def get_all_sources() -> list[BaseNewsSource]:
     """Усі доступні джерела (для fetch_by_url — перебираємо всі)."""
-    return [get_source(name) for name in ("bluesky", "mastodon", "rss")]
+    return [get_source(name) for name in ("bluesky", "mastodon")]

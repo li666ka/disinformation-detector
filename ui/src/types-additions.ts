@@ -2,7 +2,7 @@
 // ДОДАТИ ЦІ ТИПИ В КІНЕЦЬ ФАЙЛУ ui/src/types.ts
 // ────────────────────────────────────────────────────────────────────────────
 
-export type SourceType = "bluesky" | "mastodon" | "rss";
+export type SourceType = "bluesky" | "mastodon";
 
 /**
  * Нормалізований формат поста/статті з будь-якого джерела.

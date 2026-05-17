@@ -67,7 +67,7 @@ const TYPE_LABELS: Record<string, string> = {
 };
 
 const EXCLUDED_TYPES = new Set(["gin", "sage", "gnn"]);
-const SOURCES = ["mastodon", "bluesky", "rss"] as const;
+const SOURCES = ["mastodon", "bluesky"] as const;
 
 export default function AnalysisPage() {
   // Models + selection

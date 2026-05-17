@@ -23,6 +23,7 @@ import {
 import { cn } from "../lib/utils";
 import type {
   Explanation,
+  FeatureAttribution,
   GnnExplanation,
   IgExplanation,
   LlmExplanation,
@@ -62,11 +63,28 @@ export function ExplanationPanel({
 }: ExplanationPanelProps) {
   const body = useMemo(() => {
     if (isTokenExplanation(explanation)) {
+      // NB може мати token+feature (Mode B), feature-only (Mode C), або
+      // token-only (Mode A). Рендеримо обидва види, скіпаючи порожні.
+      const hasTokens = (explanation.tokens || []).length > 0;
+      const featureAttrs = (explanation as NbExplanation).feature_attributions || [];
+      const hasFeatures = featureAttrs.length > 0;
       return (
-        <TokenAttributionView
-          explanation={explanation}
-          originalText={originalText}
-        />
+        <>
+          {hasTokens && (
+            <TokenAttributionView
+              explanation={explanation}
+              originalText={originalText}
+            />
+          )}
+          {hasFeatures && (
+            <FeatureAttributionView features={featureAttrs} />
+          )}
+          {!hasTokens && !hasFeatures && (
+            <div className="text-sm text-muted-foreground italic">
+              Модель не повернула жодних attributions.
+            </div>
+          )}
+        </>
       );
     }
     if (isGnnExplanation(explanation)) {
@@ -611,5 +629,65 @@ function ExplanationMeta({ explanation }: { explanation: Explanation }) {
         ))}
       </div>
     </details>
+  );
+}
+
+
+// ── Handcrafted feature attribution (NB Mode B/C) ─────────────────────────
+
+function FeatureAttributionView({ features }: { features: FeatureAttribution[] }) {
+  const maxAbs = Math.max(...features.map((f) => Math.abs(f.attribution)), 0.001);
+  const visible = features.slice(0, 10);
+
+  return (
+    <div className="space-y-2 pt-2">
+      <div className="text-xs text-muted-foreground">
+        Handcrafted features (емоції/стиль/соц-сигнали). Червоні зсувають у
+        бік FAKE, зелені — REAL.
+      </div>
+      <div className="space-y-1">
+        {visible.map((f, i) => {
+          const intensity = Math.abs(f.attribution) / maxAbs;
+          const isFake = f.attribution >= 0;
+          const widthPct = intensity * 50;
+          return (
+            <div key={i} className="flex items-center gap-2 text-xs">
+              <span className="w-40 truncate font-mono">{f.feature}</span>
+              <span className="w-20 text-right text-muted-foreground tabular-nums">
+                raw {f.raw_value.toFixed(2)}
+              </span>
+              <div className="flex-1 h-4 bg-muted/40 rounded relative overflow-hidden">
+                <div className="absolute inset-y-0 left-1/2 w-px bg-border" />
+                <div
+                  className={cn(
+                    "absolute top-0 h-full",
+                    isFake
+                      ? "left-1/2 bg-red-400 dark:bg-red-600"
+                      : "right-1/2 bg-green-400 dark:bg-green-600",
+                  )}
+                  style={{ width: `${widthPct}%` }}
+                />
+              </div>
+              <span
+                className={cn(
+                  "w-16 text-right font-mono tabular-nums",
+                  isFake
+                    ? "text-red-600 dark:text-red-400"
+                    : "text-green-600 dark:text-green-400",
+                )}
+              >
+                {f.attribution >= 0 ? "+" : ""}
+                {f.attribution.toFixed(3)}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+      {features.length > 10 && (
+        <div className="text-xs text-muted-foreground">
+          Показано 10 з {features.length}
+        </div>
+      )}
+    </div>
   );
 }

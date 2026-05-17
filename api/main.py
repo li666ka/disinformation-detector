@@ -236,10 +236,41 @@ def analyze_text(
                         "confidence": data["confidence"],
                         "probability": data["probability"],
                     }
+                    # NB explain — окремий call до Colab /explain_nb.
+                    # Не використовуємо local detector.explain_nb_prediction:
+                    # модель лежить на Drive, її .pkl недоступний локально.
                     if request.explain:
-                        expl = detector.explain_nb_prediction(request.text)
-                        if expl is not None:
-                            nb_response["explanation"] = expl
+                        try:
+                            expl_resp = requests.post(
+                                f"{colab_url.rstrip('/')}/explain_nb",
+                                json={
+                                    "text": request.text,
+                                    "model_path": record.model_path,
+                                    # TODO: для Mode B треба також обчислити
+                                    # feature_values і передати — наразі
+                                    # відсутні → handcrafted attributions
+                                    # будуть нульовими.
+                                    "feature_values": None,
+                                },
+                                timeout=30,
+                            )
+                            if expl_resp.status_code == 200:
+                                ed = expl_resp.json()
+                                if "error" not in ed:
+                                    nb_response["explanation"] = ed
+                                else:
+                                    nb_response["explanation_error"] = ed.get("error")
+                            else:
+                                logger.warning(
+                                    "Colab /explain_nb returned %s: %s",
+                                    expl_resp.status_code, expl_resp.text[:200],
+                                )
+                                nb_response["explanation_error"] = (
+                                    f"colab_http_{expl_resp.status_code}"
+                                )
+                        except Exception as e:
+                            logger.warning(f"explain_nb proxy failed: {e}")
+                            nb_response["explanation_error"] = str(e)[:200]
                     return nb_response
 
                 # Розбираємо typed errors з Colab. HTML-відповідь (404 від

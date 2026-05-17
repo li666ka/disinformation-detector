@@ -1032,12 +1032,29 @@ export interface TokenAttribution {
   is_subword?: boolean;
 }
 
+export interface FeatureAttribution {
+  feature: string;
+  raw_value: number;
+  log_odds_diff: number;
+  attribution: number;
+}
+
 export interface NbExplanation {
   method: "log_odds";
+  mode?: "A" | "B" | "C";
+  method_params?: {
+    use_text?: boolean;
+    use_features?: boolean;
+    n_text_features?: number;
+    n_handcrafted_features?: number;
+    classifier?: string;
+  };
   tokens: TokenAttribution[];
+  all_tokens?: TokenAttribution[];
+  feature_attributions?: FeatureAttribution[];
   total_log_odds: number;
   prediction: "FAKE" | "REAL";
-  n_features_used: number;
+  n_features_used?: number;
 }
 
 export interface IgExplanation {

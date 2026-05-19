@@ -64,7 +64,11 @@ class MastodonSource(BaseNewsSource):
         instance = os.environ.get("MASTODON_INSTANCE", "https://mastodon.social").strip()
         token = os.environ.get("MASTODON_TOKEN", "").strip() or None
 
-        client = Mastodon(api_base_url=instance, access_token=token)
+        client = Mastodon(
+            api_base_url=instance,
+            access_token=token,
+            request_timeout=30,
+        )
         logger.info(f"Mastodon: instance={instance}, auth={bool(token)}")
 
         self._client = client

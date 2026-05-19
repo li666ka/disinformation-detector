@@ -27,7 +27,6 @@ import {
 } from "./components/ui/tooltip";
 import { toast } from "sonner";
 import type { Dataset, DatasetUploadResponse, DatasetStats } from "./types";
-import AnalyticsModal from "./AnalyticsModal";
 import SplitsSection from "./components/SplitsSection";
 
 function formatBytes(bytes: number): string {
@@ -83,7 +82,6 @@ export default function DatasetsPage() {
   const [statsLoading, setStatsLoading] = useState(false);
 
   // Analytics modal
-  const [analyticsDataset, setAnalyticsDataset] = useState<Dataset | null>(null);
 
   // Embedding cache info per-dataset
   const [cacheInfo, setCacheInfo] = useState<Record<number, any>>({});
@@ -361,9 +359,6 @@ export default function DatasetsPage() {
                             <CheckCircle2 className="mr-2 h-4 w-4" /> Активувати
                           </DropdownMenuItem>
                         )}
-                        <DropdownMenuItem onClick={() => setAnalyticsDataset(ds)}>
-                          <BarChart3 className="mr-2 h-4 w-4" /> Аналітика
-                        </DropdownMenuItem>
                         <DropdownMenuItem onClick={() => handleShowStats(ds)}>
                           <BarChart3 className="mr-2 h-4 w-4" /> Статистика
                         </DropdownMenuItem>
@@ -728,16 +723,6 @@ export default function DatasetsPage() {
           ) : null}
         </DialogContent>
       </Dialog>
-
-      {/* ── Analytics Modal ────────────────────────────────────────────── */}
-      {analyticsDataset && (
-        <AnalyticsModal
-          open={!!analyticsDataset}
-          onClose={() => setAnalyticsDataset(null)}
-          datasetId={analyticsDataset.id}
-          datasetName={analyticsDataset.name}
-        />
-      )}
 
       {/* ── Rename Dialog ──────────────────────────────────────────────── */}
       <Dialog open={renameOpen} onOpenChange={setRenameOpen}>

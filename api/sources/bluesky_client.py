@@ -81,7 +81,9 @@ class BlueskySource(BaseNewsSource):
                 self._authenticated = True
                 logger.info(f"Bluesky: authenticated as {handle}")
             except Exception as e:
-                logger.warning(f"Bluesky auth failed ({e}), public mode")
+                logger.warning(
+                    f"Bluesky auth failed ({type(e).__name__}: {e!r}), public mode"
+                )
                 self._authenticated = False
         else:
             logger.info("Bluesky: no credentials, public mode")
@@ -104,7 +106,10 @@ class BlueskySource(BaseNewsSource):
                 msg = str(e)
                 if "429" in msg or "rate" in msg.lower():
                     raise SourceError(self.source_name, "Rate limit", http_code=429) from e
-                raise SourceError(self.source_name, f"Search failed: {e}") from e
+                raise SourceError(
+                    self.source_name,
+                    f"Search failed: {type(e).__name__}: {e!r}",
+                ) from e
 
         posts = await asyncio.to_thread(_sync)
         return await self._parse_posts_enriched(posts)

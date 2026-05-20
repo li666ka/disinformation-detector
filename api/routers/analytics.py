@@ -46,7 +46,6 @@ def get_dataset_analytics(
     if not dataset:
         raise HTTPException(404, "Dataset not found")
 
-    # Check cache
     if not refresh and hasattr(dataset, "analytics_cache") and dataset.analytics_cache:
         try:
             cached = json.loads(dataset.analytics_cache)
@@ -55,7 +54,6 @@ def get_dataset_analytics(
         except (json.JSONDecodeError, TypeError):
             logger.warning(f"Cached analytics corrupted for dataset {dataset_id}, recomputing")
 
-    # Determine ML server URL
     is_colab = os.getenv("IS_COLAB", "false").lower() in ("true", "1", "t")
     if is_colab:
         base = os.getenv("COLAB_NGROK_URL", "").strip().rstrip("/")
@@ -85,7 +83,6 @@ def get_dataset_analytics(
         logger.error(f"ML server error: {response.text[:300]}")
         raise HTTPException(response.status_code, f"ML server: {response.text[:300]}")
 
-    # Save to cache
     try:
         if hasattr(dataset, "analytics_cache"):
             dataset.analytics_cache = json.dumps(result)

@@ -1,4 +1,3 @@
-# api/sources/__init__.py
 """
 Модуль джерел даних: Bluesky, Mastodon.
 
@@ -18,7 +17,6 @@ __all__ = [
 ]
 
 
-# Фабрика: name → instance (ледача ініціалізація, singleton per source)
 _SOURCES: dict[str, BaseNewsSource] = {}
 
 

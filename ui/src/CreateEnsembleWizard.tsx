@@ -59,7 +59,7 @@ const MODEL_ICONS: Record<string, any> = {
   gnn: Network,
 };
 
-// Кольори моделей — узгоджені з ModelsPage.
+
 const modelIconClasses = (t: string): string => {
   switch ((t || "").toLowerCase()) {
     case "nb":
@@ -182,7 +182,7 @@ export default function CreateEnsembleWizard({ onClose, onSuccess }: Props) {
 
   const canSubmit = name.trim().length > 0 && canProceedStep2;
 
-  // Auto-set equal weights at step 2 if weighted
+
   useEffect(() => {
     if (step === 2 && votingType === "weighted" && selectedModels.length > 0) {
       const equal = 1 / selectedModels.length;
@@ -194,10 +194,10 @@ export default function CreateEnsembleWizard({ onClose, onSuccess }: Props) {
         return next;
       });
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
   }, [step, votingType, selectedModels.length]);
 
-  // Auto-suggest name at step 3
+
   useEffect(() => {
     if (step === 3 && !name) {
       const types = Array.from(
@@ -207,7 +207,7 @@ export default function CreateEnsembleWizard({ onClose, onSuccess }: Props) {
         `${votingType.toUpperCase()} ${types.join("+")} (${selectedModels.length} моделей)`
       );
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
   }, [step]);
 
   const toggleModel = (id: number) => {
@@ -271,7 +271,6 @@ export default function CreateEnsembleWizard({ onClose, onSuccess }: Props) {
 
   const sumWeights = Object.values(weights).reduce((s, w) => s + w, 0);
 
-  // ── Step renderers ────────────────────────────────────────────────────
 
   const renderModelPicker = () => {
     if (loading) {

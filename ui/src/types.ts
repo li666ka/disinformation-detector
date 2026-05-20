@@ -1,4 +1,4 @@
-// ── Auth ─────────────────────────────────────────────────────────────────────
+
 
 export interface User {
   id: number;
@@ -23,7 +23,6 @@ export interface LoginRequest {
   password: string;
 }
 
-// ── Preprocessing (text cleaning before vectorization) ──────────────────────
 
 export interface PreprocessingConfig {
   removeUrls: boolean;
@@ -37,7 +36,6 @@ export interface PreprocessingConfig {
   lemmatization: boolean;
 }
 
-// ── Feature keys per group ──────────────────────────────────────────────────
 
 export type SemanticFeatureKey = "text";
 
@@ -58,39 +56,39 @@ export type EmotionalFeatureKey =
   | "negative_score";
 
 export type StylisticFeatureKey =
-  // Stylistic (form)
+
   | "caps_ratio"
   | "ttr"
   | "repetition_score"
   | "avg_word_length"
-  // Rhetorical (manipulation patterns) — раніше окрема група
+
   | "clickbait_score"
   | "authority_refs"
   | "pronoun_ratio"
   | "question_count";
 
 export type SocialFeatureKey =
-  // Profile counts
+
   | "followers_count_norm"
   | "friends_count_norm"
   | "ff_ratio"
   | "statuses_count_norm"
   | "account_age_norm"
   | "statuses_per_day"
-  // Profile flags + strings
+
   | "verified"
   | "has_description"
   | "has_location"
   | "description_length_norm"
   | "screen_name_length_norm"
   | "screen_name_digits_ratio"
-  // Engagement
+
   | "like_count_norm"
   | "retweet_count_norm"
   | "reply_count_norm"
   | "like_to_retweet_ratio"
   | "engagement_rate"
-  // Graph cascade (per-article)
+
   | "cascade_depth_norm"
   | "cascade_breadth_norm"
   | "lifetime_hours_norm"
@@ -98,7 +96,7 @@ export type SocialFeatureKey =
   | "replies_per_tweet"
   | "unique_users_norm";
 
-/** All extractable numeric feature keys. */
+
 export type FeatureKey =
   | SemanticFeatureKey
   | EmotionalFeatureKey
@@ -107,12 +105,7 @@ export type FeatureKey =
 
 export type FeatureMask = Record<FeatureKey, boolean>;
 
-// ── Feature groups ──────────────────────────────────────────────────────────
 
-/**
- * "semantic" — TF-IDF text vectorization (on/off toggle, configured via PreprocessingConfig).
- * The rest — extractable numeric features with individual sub-toggles.
- */
 export type FeatureGroupId =
   | "semantic"
   | "emotional"
@@ -123,14 +116,14 @@ export interface FeatureDefinition {
   key: FeatureKey;
   label: string;
   type: FeatureGroupId;
-  /** True для cascade/graph features у social group — для UI badge. */
+
   isGraph?: boolean;
 }
 
 export interface FeatureGroupDef {
   label: string;
   description: string;
-  /** Empty for "semantic" — it has no sub-features, only preprocessing config. */
+
   features: FeatureDefinition[];
 }
 
@@ -139,7 +132,6 @@ export interface AdditionalFeatures {
   mask: Partial<FeatureMask>;
 }
 
-// ── Model Configs (sent to backend) ─────────────────────────────────────────
 
 export type ModelType = "nb" | "distilbert" | "llm" | "gin" | "sage";
 
@@ -154,8 +146,7 @@ export interface NBModelConfig extends BaseModelConfig {
   vectorizer: "tfidf" | "count";
   ngram_range: "1,1" | "1,2" | "1,3";
   alpha: string;
-  /** True (default) — pipeline містить TF-IDF tokens.
-   *  False — тренування тільки на additional_features (для ablation). */
+
   use_text?: boolean;
 }
 
@@ -172,11 +163,7 @@ export interface LLMModelConfig extends BaseModelConfig {
   mode: "single" | "bagging";
 }
 
-/**
- * GNN models не використовують handcrafted features.
- * Node features = MiniLM sentence embeddings; граф (article→tweets→retweets/replies)
- * задає індуктивний bias.
- */
+
 export interface GINModelConfig {
   model: "gin";
   hidden_dim: string;
@@ -185,7 +172,7 @@ export interface GINModelConfig {
   learning_rate: string;
   epochs: string;
   pooling: "mean" | "sum" | "max";
-  /** Завжди null для GNN — не використовуємо handcrafted features. */
+
   additional_features: null;
 }
 
@@ -197,7 +184,7 @@ export interface SAGEModelConfig {
   learning_rate: string;
   epochs: string;
   aggregator: "mean" | "max" | "lstm";
-  /** Завжди null для GNN — не використовуємо handcrafted features. */
+
   additional_features: null;
 }
 
@@ -208,7 +195,6 @@ export type ModelConfig =
   | GINModelConfig
   | SAGEModelConfig;
 
-// ── Ensemble ────────────────────────────────────────────────────────────────
 
 export type EnsembleStrategyId = "hard" | "soft" | "weighted";
 
@@ -217,7 +203,6 @@ export interface EnsembleConfig {
   weights?: Record<ModelType, number>;
 }
 
-// ── Requests ────────────────────────────────────────────────────────────────
 
 export interface PredictRequest {
   text: string;
@@ -233,22 +218,21 @@ export interface TrainRequest {
   preprocessing?: PreprocessingConfig;
 }
 
-// ── Responses ───────────────────────────────────────────────────────────────
 
 export interface TopWords {
   fake: Array<{ word: string; score: number }>;
   real: Array<{ word: string; score: number }>;
 }
 
-/** Confusion matrix для бінарної класифікації, де FAKE = positive class (1). */
+
 export interface ConfusionMatrix {
-  /** True Negative — REAL правильно класифіковано як REAL. */
+
   tn: number;
-  /** False Positive — REAL помилково класифіковано як FAKE. */
+
   fp: number;
-  /** False Negative — FAKE помилково класифіковано як REAL. */
+
   fn: number;
-  /** True Positive — FAKE правильно класифіковано як FAKE. */
+
   tp: number;
 }
 
@@ -281,18 +265,18 @@ export interface PredictResponse {
 }
 
 export interface TrainResponse {
-  // flat metrics (merged from response.metrics by App.tsx)
-  /** Загальна точність для обох класів. */
+
+
   accuracy: number;
-  /** Precision для FAKE класу (pos_label=1). */
+
   precision: number;
-  /** Recall для FAKE класу (pos_label=1). */
+
   recall: number;
-  /** F1 для FAKE класу (pos_label=1). */
+
   f1_score: number;
-  /** Незважене середнє F1 для обох класів (FAKE та REAL). */
+
   f1_macro?: number;
-  /** ROC-AUC: probabilistic метрика; FAKE = positive class. */
+
   roc_auc?: number;
   confusion_matrix?: ConfusionMatrix;
   train_size: number;
@@ -300,7 +284,7 @@ export interface TrainResponse {
   training_time: number | string;
   top_words?: TopWords;
   feature_samples?: FeatureSample[];
-  // envelope fields from API
+
   status?: string;
   message?: string;
   path?: string;
@@ -317,7 +301,6 @@ export interface FeatureSample {
   social?: Record<string, number>;
 }
 
-// ── DB Records ──────────────────────────────────────────────────────────────
 
 export interface Experiment {
   id: number;
@@ -344,18 +327,18 @@ export interface ModelRecord {
   name: string;
   model_type: string;
   pipeline_type?: PipelineType;
-  /** Загальна точність для обох класів. */
+
   accuracy?: number;
-  /** Precision для FAKE класу (pos_label=1). */
+
   precision?: number;
-  /** Recall для FAKE класу (pos_label=1). */
+
   recall?: number;
-  /** F1 для FAKE класу (pos_label=1). */
+
   f1_score?: number;
-  // Additional metrics (optional — present in metrics_json after evaluation)
-  /** Незважене середнє F1 для обох класів. */
+
+
   f1_macro?: number;
-  /** ROC-AUC: probabilistic метрика; FAKE = positive class. */
+
   roc_auc?: number;
   best_epoch?: number;
   metrics_json?: string | null;
@@ -367,7 +350,6 @@ export interface ModelRecord {
   created_at: string;
 }
 
-// ── Wizard internal state ───────────────────────────────────────────────────
 
 export interface NBParams {
   variant: NBModelConfig["variant"];
@@ -398,7 +380,6 @@ export interface LLMParams {
 
 export type ModelParams = NBParams | DistilBERTParams | LLMParams;
 
-// ── Real-data sources (Bluesky / Mastodon) ──────────────────────────────────
 
 export type SourceType = "bluesky" | "mastodon";
 
@@ -411,7 +392,7 @@ export interface NewsItem {
   created_at?: string;
   language?: string;
 
-  // Author signals
+
   author?: string;
   author_handle?: string;
   author_account_age_days?: number | null;
@@ -422,13 +403,13 @@ export interface NewsItem {
   author_has_custom_domain?: boolean | null;
   author_has_description?: boolean | null;
 
-  // Engagement signals
+
   likes_count?: number | null;
   reposts_count?: number | null;
   replies_count?: number | null;
   quote_count?: number | null;
 
-  // Platform-specific
+
   has_url_in_text?: boolean | null;
   has_mentions?: boolean | null;
   is_reply?: boolean | null;
@@ -436,8 +417,7 @@ export interface NewsItem {
 
   raw_metadata?: Record<string, unknown> | null;
 
-  // Доданий роутером /sources/search після token-overlap фільтрації
-  // (api/sources/_relevance.py). ∈ [0,1]; недоступний у /sources/recent.
+
   _relevance_score?: number;
 }
 
@@ -451,16 +431,15 @@ export interface ClassifiedPost extends NewsItem {
   classification: {
     label: "FAKE" | "REAL" | "UNCERTAIN";
     confidence: number;
-    probability: number | null; // null when UNCERTAIN
-    reason?: string; // optional explanation from LLM
+    probability: number | null;
+    reason?: string;
   } | null;
   factCheck?: FactCheckResult;
   factCheckLoading?: boolean;
-  // LLM claim extraction — окремий етап перед класифікацією
+
   extraction?: PostExtraction;
 }
 
-// ── Extracted claim (LLM розпакування поста) ─────────────────────────────
 
 export interface ExtractedClaimItem {
   claim: string;
@@ -475,7 +454,6 @@ export interface PostExtraction {
   error?: string;
 }
 
-// ── Fact Check (Google Fact Check Tools API) ──────────────────────────────
 
 export type ClaimStance = "supports" | "refutes" | "neutral";
 
@@ -499,11 +477,11 @@ export interface FactCheckResult {
   fact_check_found: boolean;
   extraction_method?: "llm" | "fallback";
 
-  // Окремі claims
+
   claims_extracted?: string[];
   claims_results?: ClaimResult[];
 
-  // Aggregate verdict (top found claim або overall)
+
   verdict?: string | null;
   verdict_normalized: "FAKE" | "REAL" | "MIXED" | "UNKNOWN";
   publisher?: string | null;
@@ -513,14 +491,14 @@ export interface FactCheckResult {
   claim_text_matched?: string | null;
   claim_query_used?: string | null;
 
-  // Stats
+
   claims_total?: number;
   claims_found?: number;
   fake_count?: number;
   real_count?: number;
   mixed_count?: number;
 
-  // Comparison
+
   model_label?: "FAKE" | "REAL" | "UNCERTAIN" | null;
   model_confidence?: number | null;
   match?: boolean | null;
@@ -528,7 +506,7 @@ export interface FactCheckResult {
   error?: string | null;
 }
 
-// ── Datasets ──────────────────────────────────────────────────────────────
+
 export interface Dataset {
   id: number;
   user_id: number;
@@ -601,13 +579,13 @@ export interface DatasetStats {
   avg_followers_count?: number;
   top_domains: { domain: string; count: number }[];
 
-  // NEW
+
   coverage_pct?: number | null;
   coverage_gap_fake_real?: number | null;
   synthetic_articles_count?: number | null;
 }
 
-// ── LLM Presets ───────────────────────────────────────────────────────────
+
 export type LLMMode = "zero_shot" | "few_shot" | "cot" | "bagging";
 
 export interface FewShotExample {
@@ -651,7 +629,7 @@ export interface LLMPresetTestRequest {
   test_text: string;
 }
 
-/** Parsed shape of ModelRecord.llm_config JSON string. */
+
 export interface LLMPresetConfig {
   base_model: string;
   mode: LLMMode;
@@ -672,7 +650,6 @@ export interface LLMPresetTestResponse {
   elapsed_seconds: number;
 }
 
-// ── User Profile (author, liker, reposter, reply author) ────────────────
 
 export interface UserProfile {
   id: string;
@@ -697,7 +674,6 @@ export interface UserProfile {
   followers_following_ratio?: number | null;
 }
 
-// ── Claim Verification ─────────────────────────────────────────────────
 
 export interface Claim {
   text: string;
@@ -773,7 +749,6 @@ export interface VerifyRequest {
   use_llm_verdict?: boolean;
 }
 
-// ── Reply (post response with full author profile) ──────────────────────
 
 export interface Reply {
   id: string;
@@ -788,7 +763,6 @@ export interface Reply {
   url?: string | null;
 }
 
-// ── Profile group stats (computed aggregates) ───────────────────────────
 
 export interface ProfileGroupStats {
   total: number;
@@ -808,7 +782,6 @@ export interface ProfileGroupStats {
   suspicious_ratio_pct?: number;
 }
 
-// ── Post Details (full interaction data) ────────────────────────────────
 
 export interface PostDetailsStats {
   likers?: ProfileGroupStats;
@@ -837,14 +810,13 @@ export interface PostDetailsResponse {
   fetched_limits?: PostDetailsFetchedLimits;
 }
 
-// ── Ensembles ──────────────────────────────────────────────────────────
 
 export type VotingType = "hard" | "soft" | "weighted";
 
 export interface EligibleModel {
   id: number;
   name: string;
-  model_type: string;          // "nb" | "distilbert" | "gin" | "sage" | "llm"
+  model_type: string;
   splits_used: string | null;
   dataset_id: number | null;
   f1_score: number | null;
@@ -925,8 +897,6 @@ export interface CreateEnsembleRequest {
 }
 
 
-// ── Unified Analyzer (POST /analyze/v2) ─────────────────────────────────
-
 export type AnalyzeInputMode = "text" | "url" | "claim_search";
 
 export interface AnalyzeV2Options {
@@ -936,8 +906,8 @@ export interface AnalyzeV2Options {
   search_sources?: string[];
   search_limit?: number;
   classify_extracted?: boolean;
-  // Default true на backend → ExplanationPanel рендериться, якщо
-  // class.explanation повертається (NB log-odds, DistilBERT IG).
+
+
   explain?: boolean;
 }
 
@@ -966,8 +936,8 @@ export interface AnalyzeV2Classification {
   reason?: string;
   base_model_used?: string;
   mode?: string;
-  // Local explanation, attached when client sets `explain=true`.
-  // Shape depends on model type — див. Explanation union.
+
+
   explanation?: Explanation;
 }
 
@@ -1017,9 +987,9 @@ export interface InferenceContext {
   claim?: string | null;
   related_posts?: NewsItem[] | null;
   aggregates?: Record<string, number> | null;
-  // Phase 2: справжні propagation inputs (article+tweets+retweets+replies)
+
   graph_data?: Record<string, unknown> | null;
-  // Узагальнена статистика по graph_data — для UI без розпакування деталей
+
   propagation_stats?: PropagationStats | null;
   metadata?: {
     build_time_ms?: number;
@@ -1046,15 +1016,13 @@ export interface AnalyzeV2Response {
 }
 
 
-// ── Local explanation (NB log-odds / IG / GNNExplainer / LLM reasoning) ─
-
 export interface TokenAttribution {
   token: string;
   attribution: number;
-  // NB:
+
   count?: number;
   log_odds_diff?: number;
-  // DistilBERT (IG):
+
   position?: number;
   is_subword?: boolean;
 }

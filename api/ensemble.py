@@ -1,4 +1,3 @@
-# api/ensemble.py
 """
 Voting ensemble strategies for combining predictions from multiple models.
 
@@ -52,7 +51,6 @@ def hard_voting(predictions: list[dict]) -> dict:
     elif votes["REAL"] > votes["FAKE"]:
         label = "REAL"
     else:
-        # Tie — pick label with higher probability
         fake_probs = [p.get("probability") for p in certain
                       if p["label"] == "FAKE" and p.get("probability") is not None]
         real_probs = [p.get("probability") for p in certain
@@ -61,7 +59,6 @@ def hard_voting(predictions: list[dict]) -> dict:
         real_max = max(real_probs) if real_probs else 0.0
         label = "FAKE" if fake_max >= real_max else "REAL"
 
-    # Confidence = fraction of votes for winning label among CERTAIN predictions
     confidence = votes[label] / len(certain)
 
     return {
@@ -92,9 +89,7 @@ def soft_voting(predictions: list[dict]) -> dict:
             valid.append(p)
 
     if not valid:
-        # No usable predictions — fallback
         if any(_is_certain(p) for p in predictions):
-            # Some are certain but lack probability — use hard voting among those
             result = hard_voting(predictions)
             result["strategy"] = "soft_voting"
             result["excluded"] = excluded
@@ -112,7 +107,6 @@ def soft_voting(predictions: list[dict]) -> dict:
             "excluded": excluded,
         }
 
-    # Average probability (probability = P(FAKE))
     avg_prob = sum(p["probability"] for p in valid) / len(valid)
     label = "FAKE" if avg_prob > 0.5 else "REAL"
     confidence = avg_prob if label == "FAKE" else 1.0 - avg_prob
@@ -151,7 +145,6 @@ def weighted_voting(predictions: list[dict], weights: dict[str, float]) -> dict:
             return result
         return _all_uncertain_result(predictions, "weighted_voting")
 
-    # Renormalize weights for valid models only
     raw_weights = {p["model"]: weights.get(p["model"], 1.0) for p in valid}
     total_w = sum(raw_weights.values()) or 1.0
     norm_weights = {m: w / total_w for m, w in raw_weights.items()}

@@ -22,13 +22,11 @@ import requests
 
 logger = logging.getLogger(__name__)
 
-# Chunk size — 8 MB (ngrok free ліміт має спокійно пройти)
 CHUNK_SIZE_BYTES = 8 * 1024 * 1024
 
-# HTTP timeouts
 CONNECT_TIMEOUT = 10
-UPLOAD_TIMEOUT = 120       # per chunk
-FINALIZE_TIMEOUT = 300     # extraction може довго йти
+UPLOAD_TIMEOUT = 120
+FINALIZE_TIMEOUT = 300
 
 
 class ColabSyncError(Exception):
@@ -50,7 +48,7 @@ def dataset_exists_on_colab(dataset_id: int | str) -> bool:
     """Check via /dataset_status чи dataset вже у Drive."""
     base = _colab_base_url()
     if base is None:
-        return False  # local mode — nothing to check
+        return False
     try:
         r = requests.get(
             f"{base}/dataset_status",
@@ -169,20 +167,16 @@ def ensure_dataset_on_colab(
 
     dataset_id_str = str(dataset_id)
 
-    # Check if already there
     if not force:
         if dataset_exists_on_colab(dataset_id_str):
             logger.info(f"Dataset {dataset_id} вже у Drive, skip upload")
             return {"skipped": True, "reason": "already exists on Colab"}
 
-    # Build ZIP
     logger.info(f"Building ZIP for dataset_id={dataset_id} from {dataset_folder}")
     zip_bytes = _build_zip_in_memory(dataset_folder)
 
-    # Upload
     total_chunks = _upload_chunks(base, dataset_id_str, zip_bytes)
 
-    # Finalize
     finalize_result = _finalize_on_colab(base, dataset_id_str)
 
     return {

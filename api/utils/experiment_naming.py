@@ -11,7 +11,6 @@ from datetime import datetime
 from typing import Optional
 
 
-# Групи фічей для опису NB
 _EMOTIONAL = {
     "sentiment_score", "emotion_intensity", "joy", "trust", "fear",
     "surprise", "sadness", "disgust", "anger", "anticipation",
@@ -111,7 +110,6 @@ def _slugify(name: str) -> str:
         c if (c.isalnum() or c in "_-") else "_"
         for c in name.strip().lower()
     )
-    # Скорочуємо runs of "_"
     while "__" in slug:
         slug = slug.replace("__", "_")
     return slug.strip("_")
@@ -138,12 +136,9 @@ def generate_experiment_id(
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     split = _short_split(splits_subdir)
 
-    # 1) Custom name beats auto-descriptor (still includes timestamp+split).
     if custom_name and custom_name.strip():
         slug = _slugify(custom_name)
         if slug and slug not in ("default", "default_experiment", "default_exp"):
-            # Уникнути дублювання model_type prefix: якщо користувач сам додав
-            # "nb_..." → не клеїти ще одне "nb_".
             mt_prefix = f"{mt}_"
             if slug.startswith(mt_prefix):
                 slug = slug[len(mt_prefix):]
@@ -155,13 +150,11 @@ def generate_experiment_id(
                 parts.append(split)
             return "_".join(parts)
 
-    # 2) Auto-descriptor.
     if mt == "nb":
         desc = _nb_descriptor(params)
     elif mt == "distilbert":
         desc = _distilbert_descriptor(params)
     elif mt in ("gin", "sage", "gnn"):
-        # Для "gnn" payload зазвичай містить architecture у params
         arch_prefix = params.get("architecture") if mt == "gnn" else None
         desc = _gnn_descriptor(params)
         if arch_prefix:

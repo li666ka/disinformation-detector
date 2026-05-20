@@ -1,8 +1,6 @@
 import * as React from "react";
 import { cn } from "../../lib/utils";
 
-// Мінімальний Switch без @radix-ui/react-switch (щоб не тягнути новий пакет).
-// API сумісний з shadcn Switch: `checked`, `onCheckedChange`, `disabled`.
 
 interface SwitchProps
   extends Omit<React.ButtonHTMLAttributes<HTMLButtonElement>, "onChange"> {

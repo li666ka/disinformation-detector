@@ -7,8 +7,6 @@ from datetime import datetime
 from typing import Optional
 
 
-# ── Dataset CRUD ────────────────────────────────────────────────────────
-
 class DatasetComponents(BaseModel):
     """Which CSV components are present in a dataset."""
     news: bool = True
@@ -51,8 +49,8 @@ class DatasetResponse(BaseModel):
 class DatasetUploadResponse(BaseModel):
     """Returned after successful upload + validation."""
     dataset: DatasetResponse
-    preview: dict  # {"news_head": [...], "counts": {...}}
-    warnings: list[str] = []  # non-fatal issues found during validation
+    preview: dict
+    warnings: list[str] = []
 
 
 class DatasetStatsResponse(BaseModel):
@@ -63,32 +61,26 @@ class DatasetStatsResponse(BaseModel):
     real_count: int
     unlabeled_count: int
 
-    # Text statistics (from news.csv)
-    text_length_stats: dict  # {"min", "median", "mean", "max", "p95"}
+    text_length_stats: dict
     empty_text_count: int
     duplicate_text_count: int
 
-    # Tweets stats (if has_tweets)
     total_tweets: Optional[int] = None
     avg_tweets_per_news: Optional[float] = None
     news_with_tweets_pct: Optional[float] = None
 
-    # Engagement (if has_likes/retweets/replies)
     total_likes: Optional[int] = None
     total_retweets: Optional[int] = None
     total_replies: Optional[int] = None
 
-    # Users (if has_users)
     total_users: Optional[int] = None
     verified_users_pct: Optional[float] = None
     avg_followers_count: Optional[float] = None
 
-    # Domain distribution (top 10 domains from news.csv)
-    top_domains: list[dict] = []  # [{"domain": "...", "count": N}, ...]
+    top_domains: list[dict] = []
 
-    # NEW: post-rebuild metrics
-    coverage_pct: Optional[float] = None  # % tweets with author profile
-    coverage_gap_fake_real: Optional[float] = None  # % gap FAKE vs REAL
+    coverage_pct: Optional[float] = None
+    coverage_gap_fake_real: Optional[float] = None
     synthetic_articles_count: Optional[int] = None
 
 

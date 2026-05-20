@@ -25,9 +25,6 @@ class _FakeItem:
     title: Optional[str] = None
 
 
-# ── relevance_score ──────────────────────────────────────────────────────
-
-
 def test_score_high_for_topical_match():
     score = relevance_score(
         "Pfizer vaccine autism",
@@ -42,10 +39,7 @@ def test_score_low_for_off_topic_with_one_word_match():
         "Pfizer vaccine autism",
         "Tech stocks: Pfizer earnings beat Q3 expectations",
     )
-    # 1 з 3 keywords ≈ 0.33 — нижче 0.5, але не нуль. По специфікації <0.3.
-    # Наш score може бути ~0.33 — тест перевіряє що це < 0.5 (нижче "релевантне").
     assert score < 0.5
-    # І точно не ≥0.7 (це не "точний збіг")
     assert score < 0.7
 
 
@@ -78,24 +72,17 @@ def test_score_full_overlap():
 def test_tokenize_strips_stopwords_and_short():
     """3-char minimum + stoplist."""
     tokens = _tokenize("The new COVID-19 study is at NIH")
-    # "the","is","at" — stopwords. "new" — у нашому _STOP? Перевіримо що
-    # хоча б "covid" і "nih" присутні (мінімум 3 символи).
     assert "covid" in tokens
-    # 2-літерні — викинуті
     assert "is" not in tokens
-
-
-# ── filter_by_relevance ──────────────────────────────────────────────────
 
 
 def test_filter_sorts_descending_and_drops_below_threshold():
     items = [
-        _FakeItem("Pfizer COVID vaccine side effects autism studies"),  # high
-        _FakeItem("Tech stocks: Pfizer earnings beat expectations"),  # 1/3
-        _FakeItem("Lakers won championship last night"),  # 0/3
+        _FakeItem("Pfizer COVID vaccine side effects autism studies"),
+        _FakeItem("Tech stocks: Pfizer earnings beat expectations"),
+        _FakeItem("Lakers won championship last night"),
     ]
     out = filter_by_relevance("Pfizer vaccine autism", items, min_score=0.3)
-    # Перший збіг має пройти; sports — точно ні.
     assert len(out) >= 1
     assert out[0].text.startswith("Pfizer COVID vaccine side effects")
     assert all(it.text != "Lakers won championship last night" for it in out)

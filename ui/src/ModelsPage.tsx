@@ -13,11 +13,11 @@ import EvaluationResultsModal from "./EvaluationResultsModal";
 const MODEL_ICONS: Record<string, any> = {
   nb: Brain,
   distilbert: Zap,
-  deberta: Zap, // legacy records — keep for backward compat
+  deberta: Zap,
   llm: Sparkles,
   gin: Network,
   sage: Share2,
-  gnn: Network, // fallback for records saved without an explicit architecture
+  gnn: Network,
 };
 
 function ModelsPage() {

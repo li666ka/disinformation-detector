@@ -4,7 +4,7 @@ const API_URL = "http://localhost:8000";
 
 const api = axios.create({ baseURL: API_URL });
 
-// Attach JWT to every request automatically
+
 api.interceptors.request.use((config: any) => {
   const token = localStorage.getItem("token");
   if (token) {
@@ -14,7 +14,7 @@ api.interceptors.request.use((config: any) => {
   return config;
 });
 
-// On 401, clear token and reload (forces re-login)
+
 api.interceptors.response.use(
   (response) => response,
   (error: any) => {

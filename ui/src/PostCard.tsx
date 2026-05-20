@@ -78,11 +78,11 @@ export default function PostCard({
     } catch { return iso; }
   };
 
-  // Detect if author is "trusted" for visual emphasis
+
   const hasTrustSignals =
     post.author_is_verified || post.author_has_custom_domain || (post.author_followers_count ?? 0) > 10000;
 
-  // Format account age nicely
+
   const formatAge = (days?: number | null) => {
     if (days == null) return "";
     if (days < 30) return `${days}д`;
@@ -90,7 +90,7 @@ export default function PostCard({
     return `${Math.round(days / 365)}р`;
   };
 
-  // Warning signals for the post author
+
   const hasYoungAuthor = post.author_account_age_days != null && post.author_account_age_days < 30;
   const hasLowFollowers =
     post.author_followers_count != null && post.author_followers_count < 50;
@@ -98,7 +98,7 @@ export default function PostCard({
   return (
     <Card className={cn("mb-3", hasTrustSignals && "border-emerald-200 dark:border-emerald-900/50")}>
       <CardContent className="p-4">
-        {/* Header: source + author row */}
+        {}
         <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
           <div className="flex items-center gap-2 flex-wrap">
             <Badge variant="secondary" className={cn("text-[10px] uppercase tracking-wider flex items-center gap-1", SOURCE_STYLES[post.source])}>
@@ -114,7 +114,7 @@ export default function PostCard({
               </span>
             )}
 
-            {/* Trust badges */}
+            {}
             {post.author_is_verified && (
               <Badge className="bg-blue-100 text-blue-700 border-blue-200 dark:bg-blue-950/40 dark:text-blue-300 text-[10px]">
                 <CheckCircle2 className="h-2.5 w-2.5 mr-0.5" />
@@ -134,7 +134,7 @@ export default function PostCard({
               </Badge>
             )}
 
-            {/* Warning badges */}
+            {}
             {hasYoungAuthor && (
               <Badge className="bg-red-50 text-red-700 border-red-200 dark:bg-red-950/40 dark:text-red-300 text-[10px]">
                 <AlertTriangle className="h-2.5 w-2.5 mr-0.5" />
@@ -158,7 +158,7 @@ export default function PostCard({
           )}
         </div>
 
-        {/* Author metadata row (if available) */}
+        {}
         {(post.author_followers_count != null || post.author_account_age_days != null || post.author_posts_count != null) && (
           <div className="flex items-center gap-3 text-[11px] text-muted-foreground mb-2 flex-wrap">
             {post.author_followers_count != null && (
@@ -190,12 +190,12 @@ export default function PostCard({
           </div>
         )}
 
-        {/* Title */}
+        {}
         {post.title && (
           <h3 className="text-sm font-semibold mb-2 leading-snug">{post.title}</h3>
         )}
 
-        {/* Text */}
+        {}
         <div className="text-sm leading-relaxed whitespace-pre-wrap break-words mb-2">
           {displayText}
         </div>
@@ -209,7 +209,7 @@ export default function PostCard({
           </button>
         )}
 
-        {/* Engagement row */}
+        {}
         {(post.likes_count != null || post.reposts_count != null || post.replies_count != null) && (
           <div className="flex items-center gap-4 text-xs text-muted-foreground mb-3 pb-3 border-b">
             {post.likes_count != null && (
@@ -245,7 +245,7 @@ export default function PostCard({
           </div>
         )}
 
-        {/* LLM Extraction — окремий етап перед класифікацією */}
+        {}
         {onExtract && (
           <div className="mt-1">
             {!post.extraction || post.extraction.status === "idle" ? (
@@ -278,7 +278,7 @@ export default function PostCard({
           </div>
         )}
 
-        {/* Footer: action buttons + classification */}
+        {}
         <div className="flex items-center gap-2 flex-wrap">
           {!classification ? (
             <Button
@@ -300,7 +300,7 @@ export default function PostCard({
             />
           )}
 
-          {/* Details button (only for social posts, not RSS) */}
+          {}
           {onDetails && (
             <Button variant="outline" size="sm" onClick={onDetails} className="gap-1.5">
               <Users className="h-3.5 w-3.5" />
@@ -308,7 +308,7 @@ export default function PostCard({
             </Button>
           )}
 
-          {/* Verify button (useful for news-like social posts) */}
+          {}
           {onVerify && (
             <Button variant="outline" size="sm" onClick={onVerify} className="gap-1.5">
               <ShieldCheck className="h-3.5 w-3.5" />
@@ -444,7 +444,6 @@ export default function PostCard({
   );
 }
 
-// ── Classification badge ─────────────────────────────────────────────────
 
 function ClassificationBadge({
   classification,
@@ -499,8 +498,6 @@ function ClassificationBadge({
   );
 }
 
-
-// ── Extraction block (LLM розпакування claim+stance) ─────────────────────
 
 const STANCE_LABEL_UA: Record<string, { label: string; color: string }> = {
   supports: {
@@ -600,8 +597,6 @@ function ExtractionBlock({
 }
 
 
-// ── Relevance badge (token-overlap score from /sources/search) ───────────
-
 function RelevanceBadge({ score }: { score?: number }) {
   if (score == null) return null;
   const pct = Math.round(score * 100);
@@ -617,7 +612,7 @@ function RelevanceBadge({ score }: { score?: number }) {
     cls = "bg-amber-100 text-amber-700 border-amber-200 dark:bg-amber-950/40 dark:text-amber-300";
     label = "Можливо релевантне";
   } else {
-    return null; // нижчий за поріг — взагалі не показуємо
+    return null;
   }
   return (
     <Badge

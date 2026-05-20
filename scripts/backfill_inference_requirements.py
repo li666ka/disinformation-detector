@@ -24,7 +24,7 @@ def main(argv: list[str] | None = None) -> int:
                         help="Перезаписати existing requirements")
     args = parser.parse_args(argv)
 
-    create_tables()  # переконатися що колонка інстальована
+    create_tables()
     session = SessionLocal()
     try:
         records = session.query(ModelRecord).all()

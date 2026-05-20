@@ -49,7 +49,7 @@ export default function LLMPresetsPage() {
   const [loading, setLoading] = useState(true);
   const [defaults, setDefaults] = useState<LLMPresetDefaults | null>(null);
 
-  // Create modal state
+
   const [createOpen, setCreateOpen] = useState(false);
   const [name, setName] = useState("");
   const [baseModel, setBaseModel] = useState("claude-haiku-4-5");
@@ -62,30 +62,30 @@ export default function LLMPresetsPage() {
   const [baggingNCalls, setBaggingNCalls] = useState(3);
   const [saving, setSaving] = useState(false);
 
-  // Inline test
+
   const [testText, setTestText] = useState("");
   const [testResult, setTestResult] = useState<LLMPresetTestResponse | null>(null);
   const [testing, setTesting] = useState(false);
 
-  // Few-shot: add manual
+
   const [manualText, setManualText] = useState("");
   const [manualLabel, setManualLabel] = useState<"FAKE" | "REAL">("FAKE");
 
-  // Few-shot: random samples
+
   const [nFake, setNFake] = useState(2);
   const [nReal, setNReal] = useState(2);
   const [fewShotSplitsSubdir, setFewShotSplitsSubdir] = useState<string>("splits_in_domain");
   const [loadingRandom, setLoadingRandom] = useState(false);
 
-  // Social context augmentation
+
   const [includeSocialContext, setIncludeSocialContext] = useState(false);
 
-  // Rename
+
   const [renameId, setRenameId] = useState<number | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const [renaming, setRenaming] = useState(false);
 
-  // Evaluation
+
   const [evaluatingId, setEvaluatingId] = useState<number | null>(null);
   const [evalResult, setEvalResult] = useState<any>(null);
   const [evaluationProgress, setEvaluationProgress] = useState<string | null>(null);
@@ -182,8 +182,8 @@ export default function LLMPresetsPage() {
       });
 
       const jobId = startData.job_id;
-      // Якщо backend не повернув job_id (старий synchronous flow для не-LLM) —
-      // приймаємо сторінкову відповідь напряму.
+
+
       if (!jobId) {
         setEvalResult(startData);
         await fetchPresets();
@@ -195,7 +195,7 @@ export default function LLMPresetsPage() {
         return;
       }
 
-      // Polling LLM job
+
       const POLL_INTERVAL = 3000;
       while (true) {
         await new Promise((r) => setTimeout(r, POLL_INTERVAL));
@@ -341,7 +341,7 @@ export default function LLMPresetsPage() {
 
   return (
     <div className="space-y-6">
-      {/* Header */}
+      {}
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-2xl font-bold tracking-tight">LLM Пресети</h2>
@@ -352,7 +352,7 @@ export default function LLMPresetsPage() {
         </Button>
       </div>
 
-      {/* Content */}
+      {}
       {presets.length === 0 ? (
         <div className="text-center py-16">
           <Sparkles className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
@@ -366,7 +366,7 @@ export default function LLMPresetsPage() {
         </div>
       ) : (
         <>
-          {/* Evaluation settings (для LLM presets) */}
+          {}
           <div className="flex flex-wrap items-end gap-3 mb-3 p-3 rounded-md border bg-muted/30">
             <div className="space-y-1">
               <Label className="text-xs">Test split</Label>
@@ -504,7 +504,7 @@ export default function LLMPresetsPage() {
         </>
       )}
 
-      {/* ── Create Preset Dialog ───────────────────────────────────────── */}
+      {}
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
         <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
@@ -512,7 +512,7 @@ export default function LLMPresetsPage() {
           </DialogHeader>
 
           <div className="space-y-4">
-            {/* Common fields */}
+            {}
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2 col-span-2">
                 <Label>Назва *</Label>
@@ -565,7 +565,7 @@ export default function LLMPresetsPage() {
               />
             </div>
 
-            {/* Mode tabs */}
+            {}
             <Tabs value={mode} onValueChange={(v) => setMode(v as LLMMode)}>
               <TabsList className="w-full">
                 <TabsTrigger value="zero_shot" className="flex-1">Zero-shot</TabsTrigger>
@@ -586,7 +586,7 @@ export default function LLMPresetsPage() {
                     Додайте приклади FAKE та REAL текстів для навчання в контексті.
                   </p>
 
-                  {/* Existing examples */}
+                  {}
                   {fewShotExamples.length > 0 && (
                     <div className="space-y-2 max-h-40 overflow-y-auto">
                       {fewShotExamples.map((ex, i) => (
@@ -613,7 +613,7 @@ export default function LLMPresetsPage() {
                     </div>
                   )}
 
-                  {/* Add from dataset */}
+                  {}
                   <div className="p-3 rounded-lg border space-y-2">
                     <div className="grid grid-cols-3 gap-2">
                       <div className="space-y-1">
@@ -661,7 +661,7 @@ export default function LLMPresetsPage() {
                     </p>
                   </div>
 
-                  {/* Add manual */}
+                  {}
                   <div className="p-3 rounded-lg border space-y-2">
                     <div className="flex gap-2">
                       <Select value={manualLabel} onValueChange={(v) => setManualLabel(v as "FAKE" | "REAL")}>
@@ -724,7 +724,7 @@ export default function LLMPresetsPage() {
               </TabsContent>
             </Tabs>
 
-            {/* Social context augmentation */}
+            {}
             <div className="flex items-start gap-2 mt-4 p-3 border rounded-lg bg-blue-50/30 dark:bg-blue-950/20">
               <Checkbox
                 id="include-social"
@@ -748,7 +748,7 @@ export default function LLMPresetsPage() {
               </div>
             </div>
 
-            {/* Test section */}
+            {}
             <div className="border-t pt-4 space-y-3">
               <p className="text-sm font-medium">Тест (опціонально)</p>
               <Textarea
@@ -803,7 +803,7 @@ export default function LLMPresetsPage() {
         </DialogContent>
       </Dialog>
 
-      {/* ── Rename Preset Dialog ──────────────────────────────────────── */}
+      {}
       <Dialog open={renameId !== null} onOpenChange={(o) => !o && setRenameId(null)}>
         <DialogContent className="max-w-md">
           <DialogHeader>

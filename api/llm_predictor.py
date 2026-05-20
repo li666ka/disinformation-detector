@@ -1,4 +1,3 @@
-# api/llm_predictor.py
 """
 LLM classification via Claude Code CLI — preset-driven.
 
@@ -29,9 +28,6 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-# ─────────────────────────────────────────────────────────────────
-# CONSTANTS
-# ─────────────────────────────────────────────────────────────────
 
 DEFAULT_BASE_MODEL = "claude-haiku-4-5"
 
@@ -41,14 +37,11 @@ AVAILABLE_MODELS = [
     "claude-opus-4-7",
 ]
 
-# CLI executable
 CLAUDE_CLI = os.environ.get("CLAUDE_CLI_PATH", "claude")
 
-# Timeouts (seconds)
 SINGLE_TIMEOUT = 60
 BATCH_TIMEOUT = 180
 
-# Default rate limit pause (seconds between calls)
 DEFAULT_PAUSE = 0.5
 
 
@@ -81,8 +74,6 @@ DEFAULT_COT_INSTRUCTION = (
 )
 
 
-# Module-level counter for monitoring parse health.
-# Read via get_parse_failure_stats() from health endpoints / dashboards.
 _parse_failures = Counter()
 
 
@@ -94,10 +85,6 @@ def get_parse_failure_stats() -> dict:
 def reset_parse_failure_stats() -> None:
     _parse_failures.clear()
 
-
-# ─────────────────────────────────────────────────────────────────
-# CORE: Claude Code CLI invocation
-# ─────────────────────────────────────────────────────────────────
 
 class ClaudeCLIError(RuntimeError):
     """Помилка виклику claude CLI (timeout, exit_code, parse fail)."""
@@ -191,7 +178,6 @@ def _call_claude_cli(
     if not result.stdout:
         raise ClaudeCLIError("claude -p returned empty stdout")
 
-    # Outer JSON: {"result": "...", "session_id": "...", ...}
     try:
         outer = json.loads(result.stdout)
     except json.JSONDecodeError as e:
@@ -203,10 +189,6 @@ def _call_claude_cli(
 
     return response_text
 
-
-# ─────────────────────────────────────────────────────────────────
-# RESPONSE PARSING
-# ─────────────────────────────────────────────────────────────────
 
 def _fallback_result(reason: str) -> dict:
     """Standard UNCERTAIN result. Logs to _parse_failures for monitoring."""
@@ -259,7 +241,6 @@ def _parse_response(text: str) -> dict:
         except (json.JSONDecodeError, ValueError) as e:
             logger.error("JSON parse failed: %s\nRaw output:\n%s", e, text[:500])
 
-    # Plain-text fallback — no JSON or JSON broken; extract bare label
     label_match = re.search(r'\b(FAKE|REAL)\b', text, re.IGNORECASE)
     if label_match:
         extracted = label_match.group(1).upper()
@@ -308,7 +289,6 @@ def _parse_batch_response(text: str, expected_count: int) -> list[Optional[dict]
         _parse_failures["batch_not_list"] += 1
         return [None] * expected_count
 
-    # Detect ordering source: prefer text_id (0-based), fall back to id (1-based), else positional.
     has_text_id = any(isinstance(x, dict) and "text_id" in x for x in arr)
     has_legacy_id = any(isinstance(x, dict) and "id" in x for x in arr)
 
@@ -343,14 +323,12 @@ def _parse_batch_response(text: str, expected_count: int) -> list[Optional[dict]
         elif has_legacy_id:
             lid = item.get("id")
             try:
-                # Legacy id is 1-based — convert to 0-based
                 results_by_id[int(lid) - 1] = parsed
             except (ValueError, TypeError):
                 positional.append(parsed)
         else:
             positional.append(parsed)
 
-    # Reassemble in order
     if results_by_id:
         ordered: list[Optional[dict]] = []
         for i in range(expected_count):
@@ -362,7 +340,6 @@ def _parse_batch_response(text: str, expected_count: int) -> list[Optional[dict]
                 ordered.append(None)
         return ordered
 
-    # Pure positional fallback
     ordered = positional[:expected_count]
     while len(ordered) < expected_count:
         _parse_failures["batch_short_response"] += 1
@@ -377,10 +354,6 @@ def _coerce_confidence(value) -> float:
         return 0.5
     return max(0.0, min(1.0, c))
 
-
-# ─────────────────────────────────────────────────────────────────
-# PROMPT BUILDERS
-# ─────────────────────────────────────────────────────────────────
 
 def _build_user_prompt_zero_shot(text: str) -> str:
     return f"Classify this text:\n\n{text[:2000]}"
@@ -421,7 +394,6 @@ def _build_batch_user_prompt(texts: list[str], examples: Optional[list[dict]] = 
     parts.append("Texts:\n")
 
     for i, t in enumerate(texts):
-        # If contains SOCIAL CONTEXT — preserve structure (newlines matter)
         if "[SOCIAL CONTEXT]" in t or "[ARTICLE]" in t:
             cleaned = t[:4000].strip()
         else:
@@ -434,10 +406,6 @@ def _build_batch_user_prompt(texts: list[str], examples: Optional[list[dict]] = 
     )
     return "\n".join(parts)
 
-
-# ─────────────────────────────────────────────────────────────────
-# PUBLIC API: Single prediction
-# ─────────────────────────────────────────────────────────────────
 
 def predict_with_preset(text: str, preset_config: dict) -> dict:
     """
@@ -474,7 +442,6 @@ def predict_with_preset(text: str, preset_config: dict) -> dict:
 
     system_prompt = preset_config.get("system_prompt") or DEFAULT_SYSTEM_PROMPT
 
-    # Build user prompt based on mode
     if mode == "zero_shot":
         user_prompt = _build_user_prompt_zero_shot(text)
     elif mode == "few_shot":
@@ -534,7 +501,6 @@ def _run_bagging(base_model: str, system_prompt: str, user_prompt: str, n_calls:
             results.append(parsed)
         except ClaudeCLIError as e:
             logger.warning(f"bagging call {i+1}/{n_calls} failed: {e}")
-        # Small pause between bagging calls
         if i < n_calls - 1:
             time.sleep(DEFAULT_PAUSE)
 
@@ -570,10 +536,6 @@ def _run_bagging(base_model: str, system_prompt: str, user_prompt: str, n_calls:
         "votes": dict(counter),
     }
 
-
-# ─────────────────────────────────────────────────────────────────
-# PUBLIC API: Batch prediction
-# ─────────────────────────────────────────────────────────────────
 
 def predict_batch_with_preset(
     texts: list[str],
@@ -621,7 +583,6 @@ def predict_batch_with_preset(
 
     custom_system = preset_config.get("system_prompt")
 
-    # For batch, prefer batch-specific system prompt
     system_prompt = custom_system or DEFAULT_BATCH_SYSTEM_PROMPT
     examples = preset_config.get("few_shot_examples") if mode == "few_shot" else None
 
@@ -651,7 +612,6 @@ def predict_batch_with_preset(
         else:
             cli_error = None
 
-        # Convert None slots to UNCERTAIN; annotate metadata for backward compat.
         batch_results = []
         for r in raw_results:
             if r is None:
@@ -663,7 +623,6 @@ def predict_batch_with_preset(
 
         all_results.extend(batch_results)
 
-        # Progress
         elapsed = time.time() - start_time
         eta = (n_batches - batch_idx - 1) * (elapsed / (batch_idx + 1))
         logger.info(
@@ -671,16 +630,11 @@ def predict_batch_with_preset(
             f"({batch_end_idx}/{n_total} samples, {elapsed:.0f}s elapsed, ETA {eta:.0f}s)"
         )
 
-        # Pause between batches (rate limit safety for Max plan)
         if batch_idx < n_batches - 1:
             time.sleep(pause_between)
 
     return all_results
 
-
-# ─────────────────────────────────────────────────────────────────
-# LEGACY WRAPPERS
-# ─────────────────────────────────────────────────────────────────
 
 def predict(text: str, mode: str = "single", feature_values: dict | None = None) -> dict:
     """Legacy wrapper for /evaluate endpoint and analyze_text LLM branch."""

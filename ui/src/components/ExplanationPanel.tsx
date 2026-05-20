@@ -39,7 +39,6 @@ interface ExplanationPanelProps {
   originalText?: string;
 }
 
-// ── Type guards (структура response від трьох різних backend) ────────────
 
 function isTokenExplanation(e: Explanation): e is NbExplanation | IgExplanation {
   return Array.isArray((e as any).tokens);
@@ -54,7 +53,6 @@ function isLlmExplanation(e: Explanation): e is LlmExplanation {
     || Array.isArray(ll.confidence_factors);
 }
 
-// ── Public component ────────────────────────────────────────────────────
 
 export function ExplanationPanel({
   modelType,
@@ -63,8 +61,8 @@ export function ExplanationPanel({
 }: ExplanationPanelProps) {
   const body = useMemo(() => {
     if (isTokenExplanation(explanation)) {
-      // NB може мати token+feature (Mode B), feature-only (Mode C), або
-      // token-only (Mode A). Рендеримо обидва види, скіпаючи порожні.
+
+
       const hasTokens = (explanation.tokens || []).length > 0;
       const featureAttrs = (explanation as NbExplanation).feature_attributions || [];
       const hasFeatures = featureAttrs.length > 0;
@@ -142,7 +140,6 @@ export function ExplanationPanel({
   );
 }
 
-// ── Token attribution (NB, DistilBERT) ───────────────────────────────────
 
 function TokenAttributionView({
   explanation,
@@ -155,7 +152,7 @@ function TokenAttributionView({
   const [showAll, setShowAll] = useState(false);
   const visibleTokens = showAll ? allTokens : allTokens.slice(0, 10);
 
-  // У bar chart показуємо до 10 — інакше нечитабельно
+
   const chartData = useMemo(
     () =>
       allTokens.slice(0, 10).map((t) => ({

@@ -27,14 +27,11 @@ import requests
 logger = logging.getLogger(__name__)
 
 HEALTH_PATH = "/health"
-HEALTH_TIMEOUT = 3.0  # секунд
-CACHE_TTL = 30.0      # секунд
+HEALTH_TIMEOUT = 3.0
+CACHE_TTL = 30.0
 
 _cache_lock = threading.Lock()
 _cache: dict = {"checked_at": 0.0, "result": None, "url": None}
-
-
-# ── Exceptions ───────────────────────────────────────────────────────────
 
 
 class MLServerError(RuntimeError):
@@ -53,9 +50,6 @@ class MLServerOfflineError(MLServerError):
 
 class MLServerNotReadyError(MLServerError):
     """HTTP 200, але /health повернув не "ok" (моделі ще завантажуються тощо)."""
-
-
-# ── Public API ───────────────────────────────────────────────────────────
 
 
 def colab_url() -> Optional[str]:
@@ -220,4 +214,4 @@ def ensure_healthy() -> str:
     if not status["ready"]:
         raise MLServerNotReadyError(status["detail"], checked_url=url)
 
-    return url  # type: ignore[return-value]
+    return url

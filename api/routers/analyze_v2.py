@@ -35,8 +35,6 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/analyze", tags=["analyze_v2"])
 
 
-# ── Schemas ──────────────────────────────────────────────────────────────
-
 class AnalyzeV2Options(BaseModel):
     extract_claim: bool = Field(default=True, description="LLM extract claim+stance")
     classify: bool = Field(default=True, description="Run classifier")
@@ -75,11 +73,11 @@ class AnalyzeV2Response(BaseModel):
     fetched_post: Optional[dict] = None
 
     extraction: Optional[dict] = None
-    extracted_claim: Optional[str] = None  # перший claim з extraction (для UI/debug)
+    extracted_claim: Optional[str] = None
     classification: Optional[dict] = None
-    classified_text: Optional[str] = None  # non-null лише коли != original_text
-    classification_input: Optional[str] = None  # що саме пішло у класифікатор
-    extraction_fallback: bool = False  # True якщо хотіли класифікувати claim, але впали на raw
+    classified_text: Optional[str] = None
+    classification_input: Optional[str] = None
+    extraction_fallback: bool = False
     extraction_fallback_reason: Optional[str] = None
     model_used: Optional[dict] = None
 
@@ -88,23 +86,16 @@ class AnalyzeV2Response(BaseModel):
     similar_posts: Optional[list[dict]] = None
     aggregated: Optional[dict] = None
 
-    # InferenceContextBuilder (Phase 1) — для моделей з social/graph deps
-    # ({claim, n_related_posts, aggregates, metadata}). None коли модель
-    # text-only, або коли inference_requirements не виставлені.
     inference_context: Optional[dict] = None
 
     timing_ms: dict = Field(default_factory=dict)
     warnings: list[str] = Field(default_factory=list)
 
 
-# ── Helpers ──────────────────────────────────────────────────────────────
-
 _PRIORITY_TYPES = ["llm", "distilbert", "deberta", "nb"]
 _EXCLUDED_TYPES = ["gin", "sage", "gnn"]
 
 _MIN_CLAIM_LEN = 10
-# Sentinel-фрази, які іноді повертає LLM замість справжнього claim — потім ми
-# падаємо назад на raw text, інакше DistilBERT отримає сміття.
 _REFUSAL_TOKENS = (
     "cannot extract",
     "no claim found",
@@ -150,7 +141,6 @@ def _auto_select_model(db: Session) -> Optional[ModelRecord]:
         if model:
             return model
 
-    # Fallback: будь-яка active модель крім GNN
     return (
         db.query(ModelRecord)
         .filter(
@@ -200,12 +190,9 @@ def _aggregate_spread(posts_with_results: list[dict]) -> dict:
     stance_counts = {"supports": 0, "refutes": 0, "neutral": 0}
     label_counts = {"FAKE": 0, "REAL": 0, "UNCERTAIN": 0}
     confidences: list[float] = []
-    total_claims = 0  # для статистики (один пост може мати 1-3 claims)
+    total_claims = 0
 
     for p in posts_with_results:
-        # ── stance: одна мітка на ПОСТ (majority серед його claims).
-        # Інакше з 20 постів × 2-3 claims виходить 50 supports → / 20 =
-        # 250% у UI (саме та "232%" що ви бачили).
         extraction = p.get("extraction") or {}
         claims = extraction.get("claims") or []
         per_post = {"supports": 0, "refutes": 0, "neutral": 0}
@@ -215,13 +202,12 @@ def _aggregate_spread(posts_with_results: list[dict]) -> dict:
                 per_post[s] += 1
                 total_claims += 1
         if any(per_post.values()):
-            # max-vote з пріоритетом supports > refutes > neutral на tie
             post_stance = max(
                 ("supports", "refutes", "neutral"),
                 key=lambda s: (per_post[s], -("supports", "refutes", "neutral").index(s)),
             )
         else:
-            post_stance = "neutral"  # extraction нічого не знайшов → neutral
+            post_stance = "neutral"
         stance_counts[post_stance] += 1
 
         cls = p.get("classification") or {}
@@ -345,9 +331,6 @@ async def _search_and_classify_similar(
     return enriched
 
 
-# ── Main endpoint ────────────────────────────────────────────────────────
-
-
 @router.post("/v2", response_model=AnalyzeV2Response)
 async def analyze_v2(
     req: AnalyzeV2Request,
@@ -358,7 +341,6 @@ async def analyze_v2(
     timings: dict[str, int] = {}
     warnings: list[str] = []
 
-    # ── Step 0: model selection ──
     t0 = time.time()
     if req.model_id is None:
         model = _auto_select_model(db)
@@ -386,7 +368,6 @@ async def analyze_v2(
             )
     timings["model_select_ms"] = int((time.time() - t0) * 1000)
 
-    # ── Step 1: fetch URL якщо input_mode == "url" ──
     original_text = req.input
     fetched_post: Optional[dict] = None
 
@@ -419,7 +400,6 @@ async def analyze_v2(
                 status_code=400, detail="Завантажений пост не містить тексту"
             )
 
-    # ── Step 2: LLM extraction (опц.) ──
     extraction: Optional[dict] = None
     if req.options.extract_claim:
         t2 = time.time()
@@ -430,10 +410,6 @@ async def analyze_v2(
             warnings.append(f"Extraction помилка: {e}")
         timings["extraction_ms"] = int((time.time() - t2) * 1000)
 
-    # ── Step 2b: InferenceContextBuilder (Phase 1) ──
-    # Для моделей з social/graph requirements (NB-aggregated, GIN, SAGE)
-    # збагачуємо контекст постами з Bluesky/Mastodon + соц-агрегатами.
-    # Text-only моделі (NB-article, DistilBERT, LLM) пропускаються.
     inference_context: Optional[dict] = None
     inference_reqs_raw = getattr(model, "inference_requirements", None)
     if inference_reqs_raw:
@@ -460,13 +436,7 @@ async def analyze_v2(
             logger.warning(f"inference_context build failed: {e}")
             warnings.append(f"inference_context_failed: {e}")
         timings["inference_context_ms"] = int((time.time() - t_ctx) * 1000)
-        # NB: payload для inference моделей зараз НЕ містить aggregates/graph —
-        # це Phase 2 (треба міняти Colab /predict_nb та /predict_gnn signature
-        # щоб приймати context). Phase 1 — лише attach до response, щоб UI
-        # показав witness що збагачення відбулось.
 
-    # ── Step 3: choose what to classify ──
-    # extracted_claim — перший claim, якщо є (показуємо у UI навіть без fallback)
     extracted_claim: Optional[str] = None
     if extraction and extraction.get("claims"):
         first = extraction["claims"][0]
@@ -484,7 +454,7 @@ async def analyze_v2(
         else:
             valid, reason = _validate_extracted_claim(extracted_claim)
             if valid:
-                text_to_classify = extracted_claim  # type: ignore[assignment]
+                text_to_classify = extracted_claim
                 warnings.append("Класифікуємо extracted claim замість raw text")
             else:
                 extraction_fallback = True
@@ -493,15 +463,12 @@ async def analyze_v2(
                     f"Extracted claim непридатний ({reason}) — класифікуємо raw text"
                 )
 
-    # Захисний guard перед мережним викликом — інакше Colab відповість невиразним
-    # "DistilBERT model not loaded or empty text" і ми втрачаємо контекст.
     if req.options.classify and not (text_to_classify and text_to_classify.strip()):
         raise HTTPException(
             status_code=400,
             detail="Empty text after extraction — нічого класифікувати",
         )
 
-    # ── Step 4: Classification ──
     classification: Optional[dict] = None
     if req.options.classify:
         logger.info(
@@ -523,7 +490,6 @@ async def analyze_v2(
             warnings.append(f"Classification помилка: {e}")
         timings["classification_ms"] = int((time.time() - t3) * 1000)
 
-    # ── Step 5: Fact-check (опц.) ──
     fact_check: Optional[dict] = None
     if req.options.fact_check and classification:
         t4 = time.time()
@@ -540,7 +506,6 @@ async def analyze_v2(
             warnings.append(f"Fact-check помилка: {e}")
         timings["fact_check_ms"] = int((time.time() - t4) * 1000)
 
-    # ── Step 6: claim_search → spread analysis ──
     similar_posts: Optional[list[dict]] = None
     aggregated: Optional[dict] = None
 

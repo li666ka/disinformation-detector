@@ -1,4 +1,4 @@
-// ui/src/AnalyticsModal.tsx
+
 import React, { useEffect, useState } from "react";
 import api from "./api";
 import { Button } from "./components/ui/button";
@@ -36,7 +36,7 @@ interface AnalyticsData {
         label_distribution: Record<string, number>;
         source_distribution: Record<string, number>;
         source_label_breakdown: Record<string, { total: number; fake: number; real: number }>;
-        // NEW (post-rebuild fields, optional for backward compat)
+
         coverage_pct?: number;
         coverage_gap_fake_real?: number;
         synthetic_count?: number;
@@ -80,7 +80,7 @@ interface AnalyticsModalProps {
 const FAKE_COLOR = "#ef4444";
 const REAL_COLOR = "#22c55e";
 
-// Helper: build side-by-side histogram data for Recharts
+
 function buildHistogramData(
     hist: { edges: number[]; counts: number[] } | undefined,
     otherHist: { edges: number[]; counts: number[] } | undefined,
@@ -181,7 +181,7 @@ export default function AnalyticsModal({ open, onClose, datasetId, datasetName }
                                 <TabsTrigger value="users">Соц. аналіз</TabsTrigger>
                             </TabsList>
 
-                            {/* OVERVIEW */}
+                            {}
                             <TabsContent value="overview" className="space-y-4">
                                 <div className="grid grid-cols-3 gap-3">
                                     <Card>
@@ -204,7 +204,7 @@ export default function AnalyticsModal({ open, onClose, datasetId, datasetName }
                                     </Card>
                                 </div>
 
-                                {/* Coverage gap warning (тільки якщо backend повертає ці поля) */}
+                                {}
                                 {data.overview.coverage_gap_fake_real != null && (
                                     <Card className={data.overview.coverage_gap_fake_real > 15
                                         ? "border-amber-500"
@@ -284,7 +284,7 @@ export default function AnalyticsModal({ open, onClose, datasetId, datasetName }
                                 </Card>
                             </TabsContent>
 
-                            {/* EMOTIONAL */}
+                            {}
                             <TabsContent value="emotional" className="space-y-3">
                                 {Object.keys(data.emotional_features).length === 0 || "error" in data.emotional_features ? (
                                     <p className="text-sm text-muted-foreground text-center py-6">
@@ -292,7 +292,7 @@ export default function AnalyticsModal({ open, onClose, datasetId, datasetName }
                                     </p>
                                 ) : (
                                     <>
-                                        {/* Compact summary table */}
+                                        {}
                                         <Card>
                                             <CardHeader>
                                                 <CardTitle className="text-base">Середні значення</CardTitle>
@@ -331,7 +331,7 @@ export default function AnalyticsModal({ open, onClose, datasetId, datasetName }
                                             </CardContent>
                                         </Card>
 
-                                        {/* Histograms for key features */}
+                                        {}
                                         {["anger_score", "fear_score", "joy_score", "sentiment_score", "emotion_intensity"]
                                             .filter((f) => data.emotional_features[f])
                                             .map((feat) => {
@@ -361,7 +361,7 @@ export default function AnalyticsModal({ open, onClose, datasetId, datasetName }
                                 )}
                             </TabsContent>
 
-                            {/* TEXT STATS */}
+                            {}
                             <TabsContent value="text" className="space-y-3">
                                 <Card>
                                     <CardHeader>
@@ -416,7 +416,7 @@ export default function AnalyticsModal({ open, onClose, datasetId, datasetName }
                                     })}
                             </TabsContent>
 
-                            {/* TOP WORDS */}
+                            {}
                             <TabsContent value="words" className="space-y-3">
                                 <div className="grid grid-cols-2 gap-3">
                                     <Card>
@@ -471,7 +471,7 @@ export default function AnalyticsModal({ open, onClose, datasetId, datasetName }
                                 </Card>
                             </TabsContent>
 
-                            {/* USERS */}
+                            {}
                             <TabsContent value="users" className="space-y-3">
                                 {"error" in data.user_analysis ? (
                                     <p className="text-sm text-muted-foreground text-center py-6">

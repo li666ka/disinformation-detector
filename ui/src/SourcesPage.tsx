@@ -13,7 +13,6 @@ import type { ModelRecord, NewsItem, ClassifiedPost, SourceType, FactCheckResult
 import PostDetailsModal from "./PostDetailsModal";
 
 
-
 type Mode = "search" | "recent" | "url";
 
 function BlueskyIcon({ className }: { className?: string }) {
@@ -73,7 +72,7 @@ export default function SourcesPage() {
   useEffect(() => {
     api.get("/models")
       .then(({ data }) => {
-        // Bluesky/Mastodon — single-post inference, фільтруємо article-level
+
         const tweetLevel = (data as ModelRecord[]).filter(
           (m) => m.pipeline_type !== "article",
         );
@@ -253,7 +252,7 @@ export default function SourcesPage() {
         <p className="text-muted-foreground">Аналізуйте пости з соціальних мереж (Bluesky, Mastodon)</p>
       </div>
 
-      {/* Mode selector */}
+      {}
       <div className="grid grid-cols-3 gap-3">
         {MODES.map((m) => {
           const Icon = m.icon;
@@ -276,7 +275,7 @@ export default function SourcesPage() {
         })}
       </div>
 
-      {/* Sources selection */}
+      {}
       {mode !== "url" && (
         <Card>
           <CardHeader className="pb-3">
@@ -334,7 +333,7 @@ export default function SourcesPage() {
         </Card>
       )}
 
-      {/* Search input */}
+      {}
       {mode === "search" && (
         <Card>
           <CardContent className="p-4">
@@ -355,7 +354,7 @@ export default function SourcesPage() {
         </Card>
       )}
 
-      {/* Recent mode */}
+      {}
       {mode === "recent" && (
         <Button onClick={handleFetchRecent} disabled={loadingPosts}>
           {loadingPosts && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
@@ -363,7 +362,7 @@ export default function SourcesPage() {
         </Button>
       )}
 
-      {/* URL mode */}
+      {}
       {mode === "url" && (
         <Card>
           <CardHeader className="pb-3">
@@ -390,7 +389,7 @@ export default function SourcesPage() {
         </Card>
       )}
 
-      {/* Model selector */}
+      {}
       <Card>
         <CardHeader className="pb-3">
           <CardTitle className="text-base">Модель для класифікації</CardTitle>
@@ -421,7 +420,7 @@ export default function SourcesPage() {
         </CardContent>
       </Card>
 
-      {/* Results header + batch classify */}
+      {}
       {posts.length > 0 && (
         <Card>
           <CardContent className="p-4">
@@ -499,7 +498,7 @@ export default function SourcesPage() {
         </Card>
       )}
 
-      {/* Posts list */}
+      {}
       {posts.map((post) => (
         <PostCard
           key={post.id}
@@ -513,7 +512,7 @@ export default function SourcesPage() {
         />
       ))}
 
-      {/* Empty state */}
+      {}
       {posts.length === 0 && !loadingPosts && (
         <div className="text-center py-12">
           <Globe className="h-12 w-12 mx-auto text-muted-foreground mb-4" />

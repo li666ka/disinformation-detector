@@ -1,4 +1,3 @@
-# api/model.py
 import os
 import math
 import logging
@@ -24,15 +23,13 @@ def _resolve_legacy_nb_path(path: str) -> str:
     if p.suffix != ".pkl" or not p.name.startswith("model_"):
         return path
 
-    # model_<exp>.pkl  → nb_<exp>/model.pkl
-    # model_nb_<exp>.pkl → nb_<exp>/model.pkl (legacy NB прапор)
     stem_id = p.stem[len("model_"):]
     candidates = []
     if stem_id.startswith("nb_aggregated_"):
         candidates.append(p.parent / stem_id / "model.pkl")
     if stem_id.startswith("nb_"):
         candidates.append(p.parent / stem_id / "model.pkl")
-        candidates.append(p.parent / stem_id[3:] / "model.pkl")  # без nb_ префіксу
+        candidates.append(p.parent / stem_id[3:] / "model.pkl")
     candidates.append(p.parent / f"nb_{stem_id}" / "model.pkl")
     candidates.append(p.parent / stem_id / "model.pkl")
 
@@ -51,8 +48,8 @@ class FakeNewsModel:
     """
 
     def __init__(self, model_path: str | None = None):
-        self.pipeline = None       # sklearn Pipeline (simple model)
-        self._model_dict = None    # dict format: {vectorizer, classifier, has_social}
+        self.pipeline = None
+        self._model_dict = None
         resolved = _resolve_legacy_nb_path(model_path) if model_path else None
         self._model_path = resolved
         if resolved and os.path.exists(resolved):
@@ -70,7 +67,6 @@ class FakeNewsModel:
         self._model_path = path
 
         if isinstance(loaded, dict) and "pipeline" in loaded:
-            # New bundle format: {pipeline, preprocessing, emotional_features}
             self.pipeline = loaded["pipeline"]
             self._model_dict = None
             logger.info(f"Bundle model loaded from {path} (preprocessing={loaded.get('preprocessing')}, features={loaded.get('emotional_features')})")
@@ -92,15 +88,12 @@ class FakeNewsModel:
             feature_values: already-computed emotional features dict (key → float), or None
             use_text: if False, skip TF-IDF text column (only emotional features)
         """
-        # Dict-format model
         if self._model_dict is not None:
             return self._predict_dict(text, feature_values, use_text)
 
-        # Standard sklearn Pipeline (possibly with ColumnTransformer)
         if self.pipeline is not None:
             return self._predict_pipeline(text, feature_values, use_text)
 
-        # Stub
         return self._predict_stub(text, feature_values)
 
     def _predict_dict(self, text: str, feature_values: dict | None, use_text: bool = True) -> dict:
@@ -133,14 +126,11 @@ class FakeNewsModel:
         clf = self.pipeline.steps[-1][1]
 
         if preprocessor is not None and hasattr(preprocessor, "transformers_"):
-            # ColumnTransformer pipeline — build DataFrame with required columns
             row = {}
             for _name, _transformer, cols in preprocessor.transformers_:
                 if isinstance(cols, str):
-                    # text column
                     row[cols] = text if use_text else ""
                 elif isinstance(cols, list):
-                    # emotional feature columns
                     for col in cols:
                         row[col] = float(feature_values.get(col, 0.0)) if feature_values else 0.0
 
@@ -148,7 +138,6 @@ class FakeNewsModel:
             X_transformed = preprocessor.transform(X)
             fake_prob = self._get_probability(clf, X_transformed)
         else:
-            # Simple text-only pipeline
             fake_prob = self._get_probability(clf, None, pipeline_text=text if use_text else "")
 
         label = "FAKE" if fake_prob > 0.5 else "REAL"
@@ -210,12 +199,11 @@ class FakeNewsModel:
 
         try:
             feature_names = vectorizer.get_feature_names_out()
-            log_probs = clf.feature_log_prob_  # shape: (n_classes, n_features)
+            log_probs = clf.feature_log_prob_
 
             if log_probs.shape[0] != 2:
                 return None
 
-            # classes_[0] = 0 (REAL), classes_[1] = 1 (FAKE) typically
             classes = list(clf.classes_)
             fake_idx = classes.index(1) if 1 in classes else 1
             real_idx = 1 - fake_idx
@@ -265,7 +253,7 @@ class FakeNewsModel:
             fake_idx = classes.index(1)
             real_idx = 1 - fake_idx
 
-            log_probs = clf.feature_log_prob_  # (n_classes, n_features)
+            log_probs = clf.feature_log_prob_
             diff = log_probs[fake_idx] - log_probs[real_idx]
             feature_names = vectorizer.get_feature_names_out()
 
@@ -307,7 +295,6 @@ class FakeNewsModel:
     def _get_probability(self, clf, X, pipeline_text: str | None = None) -> float:
         """Extract P(FAKE) from classifier, handling various sklearn estimators."""
         if pipeline_text is not None:
-            # Use full pipeline
             if hasattr(self.pipeline, "predict_proba"):
                 proba = self.pipeline.predict_proba([pipeline_text])[0]
                 fake_idx = list(self.pipeline.classes_).index(1) if 1 in self.pipeline.classes_ else 1
@@ -319,7 +306,6 @@ class FakeNewsModel:
                 pred = self.pipeline.predict([pipeline_text])[0]
                 return 1.0 if pred == 1 else 0.0
 
-        # Direct classifier with pre-transformed X
         if hasattr(clf, "predict_proba"):
             proba = clf.predict_proba(X)[0]
             classes = list(clf.classes_)

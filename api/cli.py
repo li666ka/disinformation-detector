@@ -13,7 +13,7 @@ from api.ml_client import check_status
 
 
 def _cmd_check_ml_server(args: argparse.Namespace) -> int:
-    status = check_status(force=True)  # CLI завжди свіжий probe
+    status = check_status(force=True)
     print(json.dumps(status, indent=2, ensure_ascii=False))
     return 0 if status.get("ok") else 1
 

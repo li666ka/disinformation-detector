@@ -32,7 +32,7 @@ import type {
   Dataset,
 } from "./types";
 
-// ── Feature group definitions (shared across training and prediction) ────────
+
 const FEATURE_GROUP_DEFS: Record<string, string[]> = {
   emotional: [
     "anger_score", "fear_score", "anticipation_score", "trust_score",
@@ -41,27 +41,27 @@ const FEATURE_GROUP_DEFS: Record<string, string[]> = {
     "emotion_intensity", "emoji_count", "exclamation_count",
   ],
   stylistic: [
-    // Form (4) + rhetorical/manipulation (4) — об'єднано в одну групу
+
     "caps_ratio", "ttr", "repetition_score", "avg_word_length",
     "clickbait_score", "authority_refs", "pronoun_ratio", "question_count",
   ],
   social: [
-    // Profile counts (6)
+
     "followers_count_norm", "friends_count_norm", "ff_ratio",
     "statuses_count_norm", "account_age_norm", "statuses_per_day",
-    // Profile flags + strings (6)
+
     "verified", "has_description", "has_location",
     "description_length_norm", "screen_name_length_norm", "screen_name_digits_ratio",
-    // Engagement (5)
+
     "like_count_norm", "retweet_count_norm", "reply_count_norm",
     "like_to_retweet_ratio", "engagement_rate",
-    // Graph cascade (6)
+
     "cascade_depth_norm", "cascade_breadth_norm", "lifetime_hours_norm",
     "retweets_per_tweet", "replies_per_tweet", "unique_users_norm",
   ],
 };
 
-// ── Nav items config ─────────────────────────────────────────────────────────
+
 const NAV_ITEMS = [
   { icon: Database, label: "Датасети", tab: "datasets" },
   { icon: Brain, label: "Навчання моделі", tab: "training" },
@@ -126,7 +126,7 @@ function ActiveDatasetBanner() {
 }
 
 function App() {
-  // Auth state
+
   const [currentUser, setCurrentUser] = useState<UserType | null>(() => {
     const stored = localStorage.getItem("user");
     return stored ? JSON.parse(stored) : null;
@@ -145,14 +145,14 @@ function App() {
 
   const [activeTab, setActiveTab] = useState<string>("training");
 
-  // ── Training state ─────────────────────────────────────────────────────
+
   const [wizardConfig, setWizardConfig] = useState<TrainRequest | null>(null);
   const [modelName, setModelName] = useState<string>("");
   const [isTraining, setIsTraining] = useState<boolean>(false);
   const [trainingProgress, setTrainingProgress] = useState<number>(0);
   const [trainingResults, setTrainingResults] = useState<TrainResponse | null>(null);
 
-  // ── Training ───────────────────────────────────────────────────────────
+
   const [trainingError, setTrainingError] = useState<string | null>(null);
 
   const generateModelName = () => {
@@ -255,10 +255,10 @@ function App() {
 
       try {
         if (isGraphModel) {
-          // Новий Colab сервер обʼєднав GIN/SAGE під model_type="gnn",
-          // а архітектура передається як model_params.architecture.
+
+
           const cfg: any = wizardConfig?.models?.[0] || {};
-          const architecture = modelType; // "gin" або "sage"
+          const architecture = modelType;
           const graphPayload = {
             model_name: modelName.trim() || undefined,
             model_type: "gnn",
@@ -289,9 +289,8 @@ function App() {
         }
 
         if (modelType === "distilbert") {
-          // Article-level DistilBERT — посилаємо на /train (Colab /run_training_async),
-          // НЕ через /train_aggregated, бо новий Colab сервер для distilbert
-          // використовує тільки article_title + article_text.
+
+
           const cfg: any = wizardConfig?.models?.[0] || {};
           const distilbertPayload = {
             model_name: modelName.trim() || undefined,
@@ -302,11 +301,11 @@ function App() {
             model_params: {
               integration_mode: cfg.integration_mode || "concat",
               additional_features: cfg.additional_features || null,
-              // From UI
+
               epochs: cfg.epochs ?? 3,
               max_length: cfg.max_length ?? 256,
               freeze_base: cfg.freeze_base ?? true,
-              // Hardcoded literature defaults — не через UI
+
               base_model: "distilbert-base-uncased",
               batch_size: 16,
               learning_rate: 2e-5,
@@ -325,13 +324,12 @@ function App() {
           return;
         }
 
-        // NB — article-level pipeline через /train (apples-to-apples з DistilBERT/GNN).
-        // Endpoint /train_aggregated більше не використовується для NB.
+
         const cfg: any = wizardConfig?.models?.[0] || {};
         const useText = cfg.use_text ?? true;
         const mask = cfg.additional_features?.mask || {};
-        // "text" — це маркер lexical-групи, не справжня feature. Виключаємо
-        // його з hasFeatures, щоб ablation-валідація працювала коректно.
+
+
         const hasFeatures = Object.entries(mask).some(
           ([k, v]) => k !== "text" && v === true
         );
@@ -349,19 +347,19 @@ function App() {
           model_type: "nb",
           mode: "single",
           models: wizardConfig?.models || [],
-          // preprocessing має сенс тільки коли працюємо з текстом
+
           preprocessing: useText ? (wizardConfig?.preprocessing || {}) : {},
           model_params: {
             nb_variant: cfg.variant || cfg.nb_variant || "complement",
-            // alpha: undefined → Colab робить auto-tuning по validation set.
+
             ...(cfg.alpha != null && cfg.alpha !== ""
               ? { alpha: parseFloat(cfg.alpha) }
               : {}),
             tfidf_max_features: parseInt(cfg.tfidf_max_features || "50000", 10),
             additional_features: cfg.additional_features || null,
             use_text: useText,
-            // vectorizer/ngram передаємо тільки в text-режимі (інакше
-            // ML server їх ігнорує — clutter).
+
+
             ...(useText
               ? {
                 vectorizer_type: cfg.vectorizer || cfg.vectorizer_type || "tfidf",
@@ -418,15 +416,15 @@ function App() {
 
   return (
     <div className="flex h-screen bg-background">
-      {/* ── Sidebar ────────────────────────────────────────────────────── */}
+      {}
       <aside className="w-64 border-r border-border bg-card flex flex-col shrink-0">
-        {/* Logo */}
+        {}
         <div className="p-6 border-b border-border">
           <h1 className="text-lg font-bold text-foreground">Fake News Detector</h1>
           <p className="text-xs text-muted-foreground mt-1">ML Research Platform</p>
         </div>
 
-        {/* Navigation */}
+        {}
         <nav className="flex-1 p-3 space-y-1 overflow-y-auto">
           {NAV_ITEMS.map((item) => {
             const Icon = item.icon;
@@ -451,7 +449,7 @@ function App() {
           })}
         </nav>
 
-        {/* Footer: user + theme toggle */}
+        {}
         <div className="p-3 border-t border-border">
           <div className="flex items-center gap-2 mb-2">
             <Avatar className="h-8 w-8">
@@ -479,12 +477,12 @@ function App() {
         </div>
       </aside>
 
-      {/* ── Main content area ──────────────────────────────────────────── */}
+      {}
       <main className="flex-1 overflow-auto">
         <div className="max-w-6xl mx-auto p-8">
           {activeTab === "training" && (
             <div className="space-y-6">
-              {/* Page Header */}
+              {}
               <div>
                 <h2 className="text-2xl font-bold tracking-tight">Навчання моделі</h2>
                 <p className="text-muted-foreground">Налаштуйте та навчіть модель класифікації</p>
@@ -492,7 +490,7 @@ function App() {
 
               <ActiveDatasetBanner />
 
-              {/* Section 1: Configuration */}
+              {}
               <Card>
                 <CardHeader>
                   <CardTitle className="text-lg">1. Конфігурація моделі</CardTitle>
@@ -506,7 +504,7 @@ function App() {
                 </CardContent>
               </Card>
 
-              {/* Section 2: Training */}
+              {}
               <Card>
                 <CardHeader>
                   <CardTitle className="text-lg">2. Навчання моделі</CardTitle>
@@ -562,7 +560,7 @@ function App() {
                 </CardContent>
               </Card>
 
-              {/* Section 3: Results */}
+              {}
               {trainingResults && (
                 <div className="space-y-4">
                   <Card className="border-green-200 dark:border-green-900">
@@ -570,7 +568,7 @@ function App() {
                       <CardTitle className="text-lg">Результати тестування</CardTitle>
                     </CardHeader>
                     <CardContent className="space-y-6">
-                      {/* Metrics Grid */}
+                      {}
                       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
                         {[
                           { icon: Target, label: "Accuracy", value: trainingResults.accuracy },
@@ -596,7 +594,7 @@ function App() {
                         ))}
                       </div>
 
-                      {/* Confusion Matrix */}
+                      {}
                       <div>
                         <h3 className="text-sm font-semibold mb-1">Матриця помилок</h3>
                         <p className="text-xs text-muted-foreground mb-3">FAKE = позитивний клас</p>
@@ -633,7 +631,7 @@ function App() {
                         </div>
                       </div>
 
-                      {/* Word Cloud */}
+                      {}
                       {trainingResults.top_words && trainingResults.top_words.fake?.length > 0 && (() => {
                         const allWords = [
                           ...(trainingResults.top_words.fake || []).map((w: any) => ({ ...w, type: "fake" as const })),
@@ -680,7 +678,7 @@ function App() {
                         );
                       })()}
 
-                      {/* Training Info */}
+                      {}
                       <Card>
                         <CardContent className="p-4 space-y-1 text-sm">
                           <p>

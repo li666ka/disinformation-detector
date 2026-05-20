@@ -67,7 +67,7 @@ export default function DatasetsPage() {
   const [datasets, setDatasets] = useState<Dataset[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // Upload modal
+
   const [uploadOpen, setUploadOpen] = useState(false);
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [uploadName, setUploadName] = useState("");
@@ -75,19 +75,17 @@ export default function DatasetsPage() {
   const [uploading, setUploading] = useState(false);
   const [uploadResult, setUploadResult] = useState<DatasetUploadResponse | null>(null);
 
-  // Stats modal
+
   const [statsOpen, setStatsOpen] = useState(false);
   const [statsDataset, setStatsDataset] = useState<Dataset | null>(null);
   const [stats, setStats] = useState<DatasetStats | null>(null);
   const [statsLoading, setStatsLoading] = useState(false);
 
-  // Analytics modal
 
-  // Embedding cache info per-dataset
   const [cacheInfo, setCacheInfo] = useState<Record<number, any>>({});
   const [cacheBusy, setCacheBusy] = useState<number | null>(null);
 
-  // Rename modal
+
   const [renameOpen, setRenameOpen] = useState(false);
   const [renameDataset, setRenameDataset] = useState<Dataset | null>(null);
   const [renameName, setRenameName] = useState("");
@@ -239,7 +237,7 @@ export default function DatasetsPage() {
 
   return (
     <div className="space-y-6">
-      {/* Header */}
+      {}
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-2xl font-bold tracking-tight">Датасети</h2>
@@ -255,12 +253,12 @@ export default function DatasetsPage() {
         </div>
       </div>
 
-      {/* Splits selector for active dataset */}
+      {}
       {datasets.filter((d) => d.is_active).map((d) => (
         <SplitsSection key={d.id} dataset={d} onChange={fetchDatasets} />
       ))}
 
-      {/* Content */}
+      {}
       {datasets.length === 0 ? (
         <div className="text-center py-16">
           <Database className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
@@ -404,7 +402,7 @@ export default function DatasetsPage() {
         </div>
       )}
 
-      {/* ── Upload Dialog ──────────────────────────────────────────────── */}
+      {}
       <Dialog open={uploadOpen} onOpenChange={(open) => { if (!open) resetUploadModal(); }}>
         <DialogContent className="max-w-lg">
           <DialogHeader>

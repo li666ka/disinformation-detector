@@ -1,6 +1,4 @@
-# api/main.py
 
-# Load .env BEFORE any imports that read environment variables (auth, llm_predictor, etc.)
 try:
     from dotenv import load_dotenv
     load_dotenv()
@@ -33,7 +31,6 @@ from api.routers import analyze_v2 as analyze_v2_router
 from api.text_preprocessing import preprocess_for_bayes, preprocess_for_transformer
 from api.fact_check import verify_post
 
-# Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
@@ -41,14 +38,12 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# 1. Ініціалізація додатку
 app = FastAPI(
     title="Fake News Detection API",
     description="Бекенд для системи виявлення дезінформації на основі BERT",
     version="1.0.0"
 )
 
-# CORS налаштування для React frontend
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3000"],
@@ -57,11 +52,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 2. Ініціалізація моделі (завантажується один раз при старті)
-# Ми робимо це глобально, щоб не вантажити модель при кожному запиті
 detector = FakeNewsModel()
 
-# Ініціалізація БД та підключення роутерів
 os.makedirs("uploaded_datasets", exist_ok=True)
 create_tables()
 
@@ -80,7 +72,6 @@ app.include_router(ensembles_router.router)
 app.include_router(analyze_v2_router.router)
 
 
-# ── ML server offline → structured 503 ──────────────────────────────────────
 from api.ml_client import MLServerError, MLServerNotReadyError, MLServerOfflineError
 from fastapi.requests import Request as _FastAPIRequest
 from fastapi.responses import JSONResponse as _JSONResponse
@@ -130,7 +121,6 @@ class TrainRequest(BaseModel):
     model_type: str | None = None
     model_params: dict | None = {}
 
-    # Старі поля від фронтенду
     mode: str = "single"
     models: list[ModelConfig] = []
     ensemble: dict | None = None
@@ -160,12 +150,10 @@ def ml_server_status(force: bool = False):
     return check_status(force=force)
 
 
-# ── POST /analyze ─────────────────────────────────────────────────────────────
-
 class AnalyzeRequest(BaseModel):
     text: str
-    model_id: int  # ModelRecord.id
-    explain: bool = False  # для NB: local log-odds attribution top tokens
+    model_id: int
+    explain: bool = False
 
 
 @app.post("/analyze")
@@ -182,17 +170,9 @@ def analyze_text(
         raise HTTPException(status_code=404, detail="Модель не знайдена")
 
     mtype = record.model_type
-    # ml_client.colab_url() — нова обгортка над env (ML_SERVER_URL || COLAB_NGROK_URL).
-    # Для real-Colab гілок використовуй ml_client.ensure_healthy() — він кешує
-    # health-check і кидає MLServerOfflineError/MLServerNotReadyError, які
-    # exception handler перетворює на структурований 503.
     from api import ml_client
     colab_url = ml_client.colab_url() or ""
 
-    # Aggregated pipeline reformats the input as [TWEET]/[SOCIAL]/[ARTICLE]
-    # and dispatches to /predict_deberta. NB more не використовує aggregated:
-    # нові article-level NB моделі йдуть напряму у /predict_nb нижче, а старі
-    # aggregated NB записи інференсяться так само на сирому тексті.
     if record.pipeline_type == "aggregated" and mtype == "deberta":
         colab_url = ml_client.ensure_healthy()
         article_text = _fetch_article_for_aggregated(request.text)
@@ -216,17 +196,10 @@ def analyze_text(
             raise HTTPException(status_code=resp.status_code, detail=f"Colab error: {resp.text[:500]}")
 
     if mtype == "nb":
-        # NB має local fallback (`detector`). Колab пробуємо лише коли:
-        # (a) Colab health=ok, (b) у моделі є model_path (NB на Drive, локально
-        # цього файлу немає). Без model_path local fallback — єдиний варіант.
         colab_status = ml_client.check_status()
         try_colab = colab_status["ok"] and bool(record.model_path)
         if try_colab:
             try:
-                # Consolidated payload: explain=true → Colab робить inference
-                # + explanation за один round-trip (раніше було два call'и,
-                # extra ~200-500ms latency). Features обчислюються самим
-                # Colab у explainer_nb._auto_extract_features.
                 payload = {
                     "text": request.text,
                     "model_path": record.model_path,
@@ -250,10 +223,6 @@ def analyze_text(
                         nb_response["explanation_error"] = data["explanation_error"]
                     return nb_response
 
-                # Розбираємо typed errors з Colab. HTML-відповідь (404 від
-                # старого Colab без /predict_nb endpoint) — окремий випадок:
-                # тихо падаємо на local-fallback, бо це означає що ML-server
-                # просто не вміє цей route.
                 ctype = (resp.headers.get("content-type") or "").lower()
                 if resp.status_code == 404 and "text/html" in ctype:
                     logger.warning(
@@ -283,14 +252,11 @@ def analyze_text(
                         raise HTTPException(400, msg)
                     if err_code == "predict_failed":
                         raise HTTPException(502, f"Colab predict_nb помилка: {msg}")
-                    # Невпізнана відповідь — підіймаємо 502 з обрізаним body
                     raise HTTPException(
                         502, f"Colab /predict_nb error: {resp.text[:300]}"
                     )
             except requests.exceptions.ConnectionError:
                 ml_client.invalidate_cache()
-                # Падаємо у local fallback — для NB це валідний шлях.
-        # Fallback: local model
         result = detector.predict(preprocess_for_bayes(request.text), use_text=True)
         prob = result["score"]
         nb_response = {
@@ -305,8 +271,6 @@ def analyze_text(
         return nb_response
 
     if mtype in ("distilbert", "deberta"):
-        # Legacy "deberta" records рутятся у /predict_distilbert так само —
-        # Colab тримає його як canonical endpoint.
         colab_url = ml_client.ensure_healthy()
         try:
             payload = {"text": preprocess_for_transformer(request.text)}
@@ -325,9 +289,6 @@ def analyze_text(
                     "confidence": data.get("confidence", abs(prob - 0.5) * 2),
                     "probability": prob,
                 }
-                # Local explanation через Colab /explain_distilbert.
-                # Окремий request — повільніший (~3-15s з IG), тому лише
-                # коли клієнт явно request.explain=True.
                 if request.explain:
                     try:
                         expl_payload = {"text": preprocess_for_transformer(request.text)}
@@ -341,7 +302,6 @@ def analyze_text(
                         if expl_resp.status_code == 200:
                             distil_response["explanation"] = expl_resp.json()
                         else:
-                            # Не валимо classification, просто логуємо.
                             logger.warning(
                                 "explain_distilbert returned %s: %s",
                                 expl_resp.status_code, expl_resp.text[:200],
@@ -349,8 +309,6 @@ def analyze_text(
                     except Exception as e:
                         logger.warning(f"explain_distilbert proxy failed: {e}")
                 return distil_response
-            # Розбираємо typed-помилки з Colab (див. ml_server/routes.py
-            # predict_distilbert: empty_text / model_not_loaded / model_load_failed).
             try:
                 err = resp.json()
             except ValueError:
@@ -370,7 +328,6 @@ def analyze_text(
                         "Перетренуй модель або перезапусти Colab notebook."
                     ),
                 )
-            # .pkl bundle проблеми (з нової lazy-load логіки):
             if err_code in (
                 "pkl_not_found",
                 "model_dir_not_found",
@@ -408,9 +365,6 @@ def analyze_text(
         if not record.model_path:
             raise HTTPException(status_code=400, detail="GNN модель не має model_path")
 
-        # Phase 2: будуємо propagation graph через InferenceContextBuilder.
-        # `analyze_text` — sync FastAPI handler (запускається у thread pool),
-        # тому asyncio.run() тут безпечний (немає running event loop у потоці).
         import asyncio as _asyncio
         from api.inference_context import (
             build_inference_context,
@@ -441,7 +395,6 @@ def analyze_text(
 
         graph_inputs = context.get("graph_data") or {}
         if not graph_inputs.get("tweets"):
-            # Degraded — без пов'язаних постів GIN/SAGE нема що inference'ити.
             return {
                 "label": "UNKNOWN",
                 "confidence": 0.0,
@@ -503,7 +456,6 @@ def analyze_text(
     if mtype == "llm":
         from api.llm_predictor import predict_with_preset
 
-        # LLM presets store config as JSON in record.llm_config
         if not record.llm_config:
             raise HTTPException(
                 status_code=400,
@@ -544,8 +496,6 @@ def analyze_text(
 
     raise HTTPException(status_code=400, detail=f"Unknown model: {mtype}")
 
-
-# ── POST /fact_check ──────────────────────────────────────────────────────────
 
 class FactCheckRequest(BaseModel):
     text: str
@@ -611,9 +561,6 @@ def fact_check_batch_endpoint(
     return {"results": results, "summary": summary}
 
 
-# ── POST /train_nb_article ────────────────────────────────────────────────────
-
-
 class TrainNBArticleRequest(BaseModel):
     """Параметри для article-level NB pipeline (тонкий проксі до Colab)."""
 
@@ -630,7 +577,6 @@ def _normalize_confusion_matrix(cm) -> dict | None:
     """Accept either [[tn,fp],[fn,tp]] (sklearn list) or {tn,fp,fn,tp} (dict from Colab)."""
     if cm is None:
         return None
-    # Already a dict from ML server (most common path now)
     if isinstance(cm, dict):
         keys = {"tn", "fp", "fn", "tp"}
         if keys.issubset(cm.keys()):
@@ -639,7 +585,6 @@ def _normalize_confusion_matrix(cm) -> dict | None:
             except (TypeError, ValueError):
                 return None
         return None
-    # List format [[tn,fp],[fn,tp]] from sklearn confusion_matrix().tolist()
     if isinstance(cm, (list, tuple)) and len(cm) == 2 and len(cm[0]) == 2:
         return {
             "tn": int(cm[0][0]),
@@ -676,7 +621,6 @@ def train_nb_article_endpoint(
     if not colab_base:
         raise HTTPException(status_code=500, detail="COLAB_NGROK_URL не встановлено")
 
-    # Lazy sync — якщо Colab рестартував, re-upload
     from api.colab_sync import ensure_dataset_on_colab, ColabSyncError
     try:
         ensure_dataset_on_colab(
@@ -723,7 +667,6 @@ def train_nb_article_endpoint(
     metrics = result.get("metrics", {}) or {}
     model_dir = result.get("model_dir")
 
-    # Save ModelRecord with pipeline_type='article'
     name = (
         request.model_name
         or f"Article-NB · ds{active_ds.id} · {datetime.now(timezone.utc).strftime('%m%d-%H%M')}"
@@ -763,7 +706,6 @@ def train_nb_article_endpoint(
     db.commit()
     db.refresh(record)
 
-    # Flat shape for UI's TrainResponse
     cm = _normalize_confusion_matrix(metrics.get("confusion_matrix"))
     return {
         "status": "success",
@@ -782,9 +724,6 @@ def train_nb_article_endpoint(
             "confusion_matrix": cm,
         },
     }
-
-
-# ── POST /predict_nb_article ──────────────────────────────────────────────────
 
 
 class PredictNBArticleRequest(BaseModel):
@@ -838,9 +777,6 @@ def predict_nb_article_endpoint(
     return resp.json()
 
 
-# ── POST /train_aggregated ────────────────────────────────────────────────────
-
-
 AGGREGATED_SOCIAL_FEATURES = [
     "tweet_count", "mean_followers", "mean_friends",
     "verified_ratio", "mean_statuses", "mean_account_age_days",
@@ -852,7 +788,7 @@ class TrainAggregatedRequest(BaseModel):
     """Aggregated pipeline: 1 representative tweet + social aggregates + article."""
 
     model_name: str | None = None
-    model_type: str = "nb"  # "nb" | "deberta"
+    model_type: str = "nb"
 
     use_text: bool = True
     use_social_aggregates: bool = True
@@ -860,15 +796,13 @@ class TrainAggregatedRequest(BaseModel):
     use_stylistic: bool = False
     use_rhetorical: bool = False
 
-    # NB hyperparams
-    nb_variant: str = "complement"           # "complement" | "multinomial"
+    nb_variant: str = "complement"
     tfidf_max_features: int = 5000
     alpha: float = 1.0
 
-    # Common
     test_ratio: float = 0.20
     seed: int = 42
-    top_tweet_strategy: str = "popularity"   # "popularity" | "first" | "random"
+    top_tweet_strategy: str = "popularity"
 
 
 @app.post("/train_aggregated")
@@ -908,7 +842,6 @@ def train_aggregated_endpoint(
     else:
         ml_base = "http://127.0.0.1:5050"
 
-    # Lazy sync — same as /train
     from api.colab_sync import ensure_dataset_on_colab, ColabSyncError
     try:
         ensure_dataset_on_colab(
@@ -921,7 +854,6 @@ def train_aggregated_endpoint(
             detail=f"Не вдалося синхронізувати dataset з Colab: {e}",
         )
 
-    # Build feature mask for additional NB features
     feature_mask: dict = {}
     if request.model_type == "nb":
         if request.use_emotional:
@@ -954,7 +886,7 @@ def train_aggregated_endpoint(
     agg_experiment_id = "agg_" + generate_experiment_id(
         model_type=request.model_type,
         model_params=model_params,
-        splits_subdir=None,  # aggregated не має splits
+        splits_subdir=None,
         custom_name=request.model_name,
     )
     logger.info(f"Aggregated experiment_id: {agg_experiment_id}")
@@ -971,7 +903,6 @@ def train_aggregated_endpoint(
             "test_ratio": request.test_ratio,
             "seed": request.seed,
             "top_tweet_strategy": request.top_tweet_strategy,
-            # Соц.агрегати йдуть як числові ознаки в pipeline:
             "social_aggregate_features": social_features,
         },
         "model_name": request.model_name,
@@ -993,7 +924,6 @@ def train_aggregated_endpoint(
     except requests.exceptions.HTTPError:
         raise HTTPException(status_code=start_response.status_code, detail=f"ML error: {start_response.text[:500]}")
 
-    # ── Poll until done (same loop as /train) ──
     import time as _time
     POLL_INTERVAL = 5
     MAX_WAIT = 14400
@@ -1034,7 +964,6 @@ def train_aggregated_endpoint(
     metrics = ml_data.get("metrics", {}) or {}
     model_path = ml_data.get("path")
 
-    # Persist ModelRecord with pipeline_type='aggregated'
     name = (
         request.model_name
         or f"Aggregated-{request.model_type.upper()} · ds{active_ds.id} · {datetime.now(timezone.utc).strftime('%m%d-%H%M')}"
@@ -1091,14 +1020,10 @@ def train_aggregated_endpoint(
             "training_time": metrics.get("training_time"),
             "confusion_matrix": cm,
         },
-        # Forward to UI — already has rendering logic for both:
         "feature_samples": ml_data.get("feature_samples", []),
         "top_words": ml_data.get("top_words", {}),
         "data_stats": ml_data.get("data_stats", {}),
     }
-
-
-# ── POST /predict_aggregated ──────────────────────────────────────────────────
 
 
 class PredictAggregatedRequest(BaseModel):
@@ -1123,7 +1048,7 @@ def _fetch_article_for_aggregated(text: str) -> str:
     if not m:
         return ""
     try:
-        from api.fact_check import fetch_article_text  # may not exist — handled below
+        from api.fact_check import fetch_article_text
         return fetch_article_text(m.group(0)) or ""
     except Exception:
         return ""
@@ -1155,9 +1080,6 @@ def predict_aggregated_endpoint(
     payload: dict = {"text": formatted}
     if record.model_path:
         payload["model_path"] = record.model_path
-    # У майбутньому тут можна передати реальні агрегати з Bluesky/Mastodon API:
-    # payload["aggregates"] = {"tweet_count": ..., "mean_followers": ..., ...}
-    # Зараз empty — ML-сервер підставить train_mean як fallback.
 
     try:
         resp = requests.post(f"{colab_base}{endpoint}", json=payload, timeout=60)
@@ -1209,7 +1131,6 @@ def train_model(
     print(request.model_dump())
     print("------------------------------------")
 
-    # 1. Визначаємо тип моделі (з прямого поля або з масиву models)
     actual_model_type = request.model_type
     if not actual_model_type and request.models and len(request.models) > 0:
         actual_model_type = request.models[0].model
@@ -1217,9 +1138,6 @@ def train_model(
     if not actual_model_type:
         raise HTTPException(status_code=400, detail="Не вказано тип моделі для тренування")
 
-    # GNN merger: фронтенд шле model_type="gnn" + model_params.architecture="gin"|"sage".
-    # У БД зберігаємо model_type як architecture (gin/sage), щоб ModelsPage показав
-    # правильну іконку. На Colab летить "gnn" як було.
     gnn_architecture = None
     if actual_model_type == "gnn":
         params = request.model_params or {}
@@ -1230,14 +1148,12 @@ def train_model(
                 detail="Для model_type='gnn' треба вказати model_params.architecture='gin' або 'sage'",
             )
 
-    # 2. Формуємо параметри моделі — завжди беремо з models[0] якщо є
     model_params = request.model_params or {}
     if request.models and len(request.models) > 0:
         from_models = request.models[0].model_dump(exclude={"model"})
-        model_params = {**from_models, **model_params}  # model_params overrides if both set
+        model_params = {**from_models, **model_params}
     logger.info(f"model_params sent to Colab: {model_params}")
 
-    # 3. Визначаємо цільовий URL залежно від режиму (Local vs Colab)
     is_colab = os.getenv("IS_COLAB", "false").lower() in ("true", "1", "t")
     
     if is_colab:
@@ -1252,7 +1168,6 @@ def train_model(
         target_url = f"{local_base}/run_training"
         print(f"Маршрутизація: Local Flask -> {target_url}")
 
-    # 4. Find active dataset for current user
     active_ds = db.query(Dataset).filter(
         Dataset.user_id == current_user.id,
         Dataset.is_active == True,
@@ -1263,7 +1178,6 @@ def train_model(
             detail="Немає активного датасету. Активуйте у Datasets page.",
         )
 
-    # 5. Lazy sync — якщо Colab рестартував, re-upload
     from api.colab_sync import ensure_dataset_on_colab, ColabSyncError
     try:
         sync_result = ensure_dataset_on_colab(
@@ -1278,10 +1192,8 @@ def train_model(
             detail=f"Не вдалося синхронізувати dataset з Colab: {e}"
         )
 
-    # 6. Simple payload — no CSV data
     splits_subdir = f"splits_{active_ds.active_split}" if active_ds.active_split else None
 
-    # Auto-generate informative experiment_id якщо клієнт прислав default/empty.
     from api.utils.experiment_naming import (
         generate_experiment_id,
         is_default_experiment_id,
@@ -1313,7 +1225,6 @@ def train_model(
     print(f"Відправка на ML-сервер: {target_url}")
 
     try:
-        # DEBUG
         payload_keys = list(payload.keys())
         print(f"DEBUG target_url={target_url!r}")
         print(f"DEBUG payload keys: {payload_keys}")
@@ -1325,7 +1236,6 @@ def train_model(
         total_size = sum(len(str(v)) if not isinstance(v, (dict, list)) else len(json.dumps(v)) for v in payload.values())
         print(f"DEBUG total payload size: ~{total_size:,} chars ({total_size/1024/1024:.2f} MB)")
 
-        # ── ASYNC PATTERN: start job, then poll ──
         async_url = target_url.replace("/run_training", "/run_training_async")
         status_base = target_url.rsplit("/", 1)[0] + "/training_status"
 
@@ -1340,10 +1250,9 @@ def train_model(
         print(f"✓ Job started: {job_id}")
         logger.info(f"Async training job started: {job_id}")
 
-        # ── Polling loop ──
         import time as _time
-        POLL_INTERVAL = 5  # seconds
-        MAX_WAIT = 14400   # 4 hours
+        POLL_INTERVAL = 5
+        MAX_WAIT = 14400
         start_time = _time.time()
         last_progress = None
 
@@ -1418,21 +1327,16 @@ def train_model(
         traceback.print_exc()
         raise
 
-    # Save experiment to DB — use the same auto-generated id як payload.
     metrics = ml_data.get("metrics", {})
     exp_id = experiment_id
-    # Ensure unique experiment_id (append suffix if collision)
     base_exp_id = exp_id
     counter = 0
     while db.query(Experiment).filter(Experiment.experiment_id == exp_id).first():
         counter += 1
         exp_id = f"{base_exp_id}_{counter}"
 
-    # Stored model_type: для GNN зберігаємо architecture (gin/sage), для інших — як є.
     stored_model_type = gnn_architecture if gnn_architecture else actual_model_type
 
-    # pipeline_type: nb/distilbert тренуються на article-level, gnn — на graph;
-    # старі aggregated моделі лишаються як є у БД (їхні записи не зачіпаються).
     if actual_model_type in ("nb", "distilbert"):
         stored_pipeline_type = "article"
     elif actual_model_type == "gnn":
@@ -1458,15 +1362,11 @@ def train_model(
     )
     db.add(exp)
 
-    # Register model file
     model_file = ml_data.get("path")
     if model_file:
-        # Унифікована структура: всі моделі — у підпапках з ім'ям "model.pkl",
-        # тож basename більше не унікальний. Завжди префіксуємо experiment_id.
         base_filename = os.path.basename(model_file)
         filename = f"{exp_id}_{base_filename}"
 
-        # Safety net на випадок неймовірної колізії exp_id_<basename>.
         if db.query(ModelRecord).filter(ModelRecord.filename == filename).first():
             import time as _time
             collided = filename

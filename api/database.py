@@ -44,21 +44,17 @@ class Dataset(Base):
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
 
-    # Identification
     name = Column(String, nullable=False)
     description = Column(Text, nullable=True)
 
-    # Storage path (absolute or project-relative folder)
     folder_path = Column(String, nullable=False)
 
-    # news.csv stats (always computed at upload time)
     total_news = Column(Integer, default=0)
     fake_count = Column(Integer, default=0)
     real_count = Column(Integer, default=0)
-    unlabeled_count = Column(Integer, default=0)  # rows with label=null
+    unlabeled_count = Column(Integer, default=0)
 
-    # Which CSV files are present (detected at upload)
-    has_news = Column(Boolean, default=True)       # always true if upload succeeded
+    has_news = Column(Boolean, default=True)
     has_tweets = Column(Boolean, default=False)
     has_retweets = Column(Boolean, default=False)
     has_replies = Column(Boolean, default=False)
@@ -66,18 +62,13 @@ class Dataset(Base):
     has_users = Column(Boolean, default=False)
     has_evidence = Column(Boolean, default=False)
 
-    # Physical info
     file_size_bytes = Column(Integer, default=0)
 
-    # State
-    is_active = Column(Boolean, default=False)  # one per user can be active
+    is_active = Column(Boolean, default=False)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
-    # Cached analytics JSON (from Colab /analyze_dataset)
     analytics_cache = Column(Text, nullable=True)
 
-    # Active split selection: NULL = auto-split (70/15/15),
-    # "in_domain" / "cross_domain" / "mixed" = використовувати splits_<name>/ на ML server.
     active_split = Column(String, nullable=True, default=None)
 
 
@@ -87,7 +78,6 @@ class Experiment(Base):
     experiment_id = Column(String, unique=True, index=True, nullable=False)
     user_id = Column(Integer, nullable=False)
 
-    # Dataset used for training (NEW)
     dataset_id = Column(Integer, ForeignKey("datasets.id"), nullable=True)
 
     model_type = Column(String, nullable=False)
@@ -116,11 +106,10 @@ class ModelRecord(Base):
     __tablename__ = "models"
     id = Column(Integer, primary_key=True, index=True)
     experiment_id = Column(String, nullable=True)
-    # Dataset на якому модель тренувалась — для відображення у ModelsPage картці.
     dataset_id = Column(Integer, ForeignKey("datasets.id"), nullable=True)
     name = Column(String, nullable=False)
     model_type = Column(String, nullable=False)
-    pipeline_type = Column(String, nullable=False, default="tweet")  # "tweet" | "article" | "aggregated" | "graph"
+    pipeline_type = Column(String, nullable=False, default="tweet")
     filename = Column(String, unique=True, nullable=True)
     model_path = Column(String, nullable=True)
     llm_config = Column(Text, nullable=True)
@@ -129,18 +118,9 @@ class ModelRecord(Base):
     recall = Column(Float, nullable=True)
     f1_score = Column(Float, nullable=True)
     metrics_json = Column(Text, nullable=True)
-    # Compact predictions JSON (article_ids/y_true/y_pred/y_proba_fake) — single
-    # source of truth для ансамблів. Drive predictions.json лишається як backup.
     predictions_json = Column(Text, nullable=True)
     is_active = Column(Boolean, default=False)
-    # Який split-набір використано при тренуванні: NULL = auto/unknown,
-    # "in_domain" / "cross_domain" / "mixed" — фіксований split із splits_<name>/.
     splits_used = Column(String, nullable=True, default=None)
-    # JSON dict що каже /analyze pipeline'у які stages потрібні до inference:
-    # {claim_extraction, social_search:{enabled,sources,max_posts,lookback_days},
-    #  social_aggregates:[...], graph_construction:{enabled,...}}.
-    # Заповнюється при створенні моделі (див. api.inference_context.derive_requirements)
-    # або через scripts/backfill_inference_requirements.py для legacy записів.
     inference_requirements = Column(Text, nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
@@ -153,20 +133,19 @@ class Ensemble(Base):
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     name = Column(String, nullable=False)
 
-    voting_type = Column(String, nullable=False)  # 'hard' | 'soft' | 'weighted'
-    member_model_ids = Column(Text, nullable=False)  # JSON array: [1, 2, 3]
-    weights = Column(Text, nullable=True)  # JSON dict якщо weighted: {"1": 0.5, ...}
+    voting_type = Column(String, nullable=False)
+    member_model_ids = Column(Text, nullable=False)
+    weights = Column(Text, nullable=True)
 
-    # Metrics (як для звичайних моделей)
     accuracy = Column(Float, nullable=True)
     precision = Column(Float, nullable=True)
     recall = Column(Float, nullable=True)
     f1_score = Column(Float, nullable=True)
     f1_macro = Column(Float, nullable=True)
     roc_auc = Column(Float, nullable=True)
-    metrics_json = Column(Text, nullable=True)  # confusion_matrix, etc.
+    metrics_json = Column(Text, nullable=True)
 
-    splits_used = Column(String, nullable=True)  # 'splits_cross_domain' тощо
+    splits_used = Column(String, nullable=True)
     dataset_id = Column(Integer, ForeignKey("datasets.id"), nullable=True)
 
     is_active = Column(Boolean, default=False, nullable=False)
@@ -206,7 +185,6 @@ def _run_sqlite_migrations():
                     f"ALTER TABLE {table} ADD COLUMN {column} {coltype}"
                 )
 
-        # Створити ensembles table якщо не існує
         conn.exec_driver_sql("""
             CREATE TABLE IF NOT EXISTS ensembles (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,

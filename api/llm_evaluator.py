@@ -69,7 +69,6 @@ def evaluate_llm_preset(
     """
     t_start = time.time()
 
-    # ── Завантажити news.csv ──
     ds_path = DATASETS_ROOT / f"user_{user_id}" / f"dataset_{dataset_id}"
     news_path = ds_path / "news.csv"
     if not news_path.exists():
@@ -78,7 +77,6 @@ def evaluate_llm_preset(
     logger.info(f"Loading {news_path}")
     news_df = pd.read_csv(news_path, low_memory=False)
 
-    # ── Завантажити test split ──
     test_path = ds_path / splits_subdir / "split_test.csv"
     if not test_path.exists():
         raise FileNotFoundError(f"test split не знайдено: {test_path}")
@@ -86,7 +84,6 @@ def evaluate_llm_preset(
     test_split = pd.read_csv(test_path)
     test_aids = test_split["article_id"].astype(str).tolist()
 
-    # ── Filter news to test articles ──
     news_df["article_id"] = news_df["article_id"].astype(str)
     test_df = news_df[news_df["article_id"].isin(test_aids)].copy()
     test_df["article_text_full"] = (
@@ -98,7 +95,6 @@ def evaluate_llm_preset(
 
     logger.info(f"Test set: {len(test_df)} articles ({splits_subdir})")
 
-    # ── Sample max_samples (stratified) ──
     if len(test_df) > max_samples:
         from sklearn.model_selection import train_test_split as _tts
 
@@ -115,7 +111,6 @@ def evaluate_llm_preset(
 
     n_total_articles = len(test_df)
 
-    # Initial progress signal — UI shows 0/N immediately (instead of 0/0 until first batch)
     if progress_callback:
         progress_callback(0, n_total_articles)
 
@@ -148,7 +143,6 @@ def evaluate_llm_preset(
         else:
             texts.append(article_text)
 
-        # Per-record log (every 10) so user can tell prompt building is alive
         if prompt_idx % 10 == 0 or prompt_idx == n_total_articles:
             logger.info(
                 f"Prompts built: {prompt_idx}/{n_total_articles} "
@@ -172,7 +166,6 @@ def evaluate_llm_preset(
 
     y_true = test_df["y_true"].values
 
-    # ── Predict batch by batch ──
     batch_size = 10
     n_total = len(texts)
     n_batches = (n_total + batch_size - 1) // batch_size
@@ -203,10 +196,6 @@ def evaluate_llm_preset(
         for r in results:
             label_int = _llm_label_to_int(r.get("label", ""))
             y_pred.append(label_int)
-            # ROC-AUC потребує prob того що FAKE.
-            #   predict=FAKE → prob_fake = confidence
-            #   predict=REAL → prob_fake = 1 - confidence
-            #   error/uncertain → 0.5 (neutral)
             conf = float(r.get("confidence", 0.5))
             if label_int == 1:
                 confidences.append(conf)
@@ -233,7 +222,6 @@ def evaluate_llm_preset(
         else np.array([str(i) for i in range(len(y_pred_arr))])
     )
 
-    # ── Filter ERROR predictions з metrics ──
     valid_mask = y_pred_arr >= 0
     n_errors = int((~valid_mask).sum())
     if n_errors > 0:
@@ -247,10 +235,8 @@ def evaluate_llm_preset(
     if len(y_true_clean) == 0:
         raise RuntimeError("All LLM predictions failed")
 
-    # ── Compute metrics через ЄДИНУ функцію ──
-    # ml_server може бути недоступний у цьому процесі — fallback локальна копія
     try:
-        from ml_server.utils import compute_metrics  # type: ignore
+        from ml_server.utils import compute_metrics
     except ImportError:
         def compute_metrics(y_true, y_pred, training_time=None, y_proba=None):
             y_true = np.asarray(y_true)
@@ -301,7 +287,6 @@ def evaluate_llm_preset(
         f"time={metrics['evaluation_time']}s"
     )
 
-    # Compact predictions JSON — для БД (single source of truth для ансамблів).
     predictions_compact = {
         "article_ids": [str(a) for a in article_ids_clean.tolist()],
         "y_true": [int(v) for v in y_true_clean.tolist()],
@@ -315,12 +300,10 @@ def evaluate_llm_preset(
     }
     metrics["_predictions_compact"] = predictions_compact
 
-    # Save predictions у файл (Drive backup) — best-effort, не критично якщо
-    # ml_server недоступний у поточному оточенні.
     try:
         import os as _os
 
-        from ml_server.predictions_cache import save_predictions  # type: ignore
+        from ml_server.predictions_cache import save_predictions
 
         llm_preds_root = Path(_os.environ.get("MODELS_ROOT", "models")) / "llm_predictions"
         preset_id = preset_config.get("preset_id", "unknown")

@@ -15,7 +15,7 @@ if not SECRET_KEY or len(SECRET_KEY) < 32:
         "and add it to your .env file."
     )
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24  # 24 hours
+ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24
 
 bearer_scheme = HTTPBearer()
 

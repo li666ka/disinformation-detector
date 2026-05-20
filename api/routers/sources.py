@@ -1,4 +1,3 @@
-# api/routers/sources.py
 """
 Router для джерел даних: пошук, свіжі пости, fetch за URL.
 
@@ -32,18 +31,15 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/sources", tags=["sources"])
 
 
-# ── Request/Response schemas ──────────────────────────────────────────────
-
 class SourceSearchResponse(BaseModel):
     posts: list[dict]
     total: int
     sources_used: list[str]
-    # Опційне повідомлення для UI (напр., "знайдено N постів але всі нерелевантні")
     message: Optional[str] = None
 
 
 class FetchUrlRequest(BaseModel):
-    url: str  # не HttpUrl — щоб не падати при неочікуваних схемах
+    url: str
 
 
 class PostDetailsResponse(BaseModel):
@@ -55,7 +51,6 @@ class PostDetailsResponse(BaseModel):
     stats: Optional[dict] = None
     fetched_limits: Optional[dict] = None
 
-# ── Helpers ───────────────────────────────────────────────────────────────
 
 def _parse_sources_param(sources_csv: str) -> list[str]:
     """Розпарсити "bluesky,mastodon" → ["bluesky", "mastodon"]."""
@@ -73,7 +68,7 @@ def _parse_sources_param(sources_csv: str) -> list[str]:
 
 async def _run_across_sources(
     source_names: list[str],
-    action: str,  # "search" | "recent"
+    action: str,
     **kwargs,
 ) -> tuple[list[NewsItem], list[str], list[str]]:
     """
@@ -113,8 +108,6 @@ async def _run_across_sources(
 
 def _items_to_dicts(items: list[NewsItem], limit: int) -> list[dict]:
     """Конвертувати NewsItem → dict та обрізати до ліміту."""
-    # Якщо з кількох джерел — чергуємо, щоб не було багато Bluesky зверху,
-    # потім багато Mastodon тощо. Простий round-robin:
     by_source: dict[str, list[NewsItem]] = {}
     for item in items:
         by_source.setdefault(item.source, []).append(item)
@@ -128,8 +121,6 @@ def _items_to_dicts(items: list[NewsItem], limit: int) -> list[dict]:
 
     return [item.to_dict() for item in interleaved[:limit]]
 
-
-# ── Endpoints ─────────────────────────────────────────────────────────────
 
 @router.get("/search", response_model=SourceSearchResponse)
 async def search_posts(
@@ -169,9 +160,8 @@ async def search_posts(
 
     fallback_message: Optional[str] = None
 
-    # Fallback: спробуємо коротший query з нижчим порогом.
     if not filtered and total_raw > 0:
-        from api.sources._relevance import _tokenize  # noqa: WPS450 — same module
+        from api.sources._relevance import _tokenize
         top_keywords = list(_tokenize(query))[:2]
         if top_keywords:
             short_query = " ".join(top_keywords)
@@ -197,7 +187,6 @@ async def search_posts(
             message=fallback_message,
         )
 
-    # Серіалізуємо з прикріпленим _relevance_score.
     posts_with_score: list[dict] = []
     for item in filtered[:limit]:
         d = item.to_dict() if hasattr(item, "to_dict") else dict(item)
@@ -269,8 +258,6 @@ async def fetch_by_url(
     )
 
 
-# ── GET /sources/post-details ────────────────────────────────────────────
-
 @router.get("/post-details", response_model=PostDetailsResponse)
 async def get_post_details_endpoint(
     post_id: str = Query(..., description='Post ID like "bluesky:at://..." or "mastodon:12345" or a URL'),
@@ -296,7 +283,6 @@ async def get_post_details_endpoint(
       - "12345" (Mastodon numeric ID)
       - "https://mastodon.social/@user/12345"
     """
-    # Try each source until one handles this post_id
     details = None
     last_err = None
 
@@ -329,8 +315,6 @@ async def get_post_details_endpoint(
     return PostDetailsResponse(**details.to_dict())
 
 
-# ── Claim extraction (LLM розпакування поста перед класифікацією) ─────────
-
 class ExtractClaimsRequest(BaseModel):
     text: str = Field(..., min_length=10, description="Текст поста")
     use_llm: bool = Field(default=True, description="Чи використовувати LLM (інакше regex fallback)")
@@ -338,13 +322,13 @@ class ExtractClaimsRequest(BaseModel):
 
 class ExtractedClaimItem(BaseModel):
     claim: str
-    stance: str  # "supports" | "refutes" | "neutral"
-    author_verdict: str  # "REAL" | "FAKE" | "MIXED"
+    stance: str
+    author_verdict: str
 
 
 class ExtractClaimsResponse(BaseModel):
     claims: list[ExtractedClaimItem]
-    method: str  # "llm" | "fallback"
+    method: str
     count: int
 
 

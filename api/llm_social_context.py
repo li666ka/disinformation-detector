@@ -21,11 +21,8 @@ logger = logging.getLogger(__name__)
 
 DATASETS_ROOT = Path("uploaded_datasets")
 
-# Cache: load tweets/users/replies once per dataset
 _cache: dict[tuple[int, int], dict] = {}
 
-# Cache for computed overview stats (heavy on large datasets)
-# key: (user_id, dataset_id, article_id) → stats dict
 _overview_cache: dict[tuple[int, int, str], dict] = {}
 
 ROLE_KEYWORDS = (
@@ -81,8 +78,6 @@ def _load_dataset_files(user_id: int, dataset_id: int) -> dict:
             result["replies_by_tweet"] = dict(tuple(replies_df.groupby("parent_tweet_id")))
             result["replies"] = replies_df
 
-            # Build dataset-wide children index ONCE: parent_id → [reply_id, ...].
-            # Used for fast cascade BFS in _compute_overview_stats.
             children_by_parent: dict[str, list[str]] = {}
             for parent, child in zip(
                 replies_df["parent_tweet_id"].values,
@@ -115,10 +110,6 @@ def _load_dataset_files(user_id: int, dataset_id: int) -> dict:
     )
     return result
 
-
-# ─────────────────────────────────────────────────────────────────
-# HELPERS
-# ─────────────────────────────────────────────────────────────────
 
 def _is_verified(user_row) -> bool:
     if user_row is None:
@@ -194,10 +185,6 @@ def _format_user_meta_rich(user_row, fallback_name: str = "user") -> str:
     return f"@{screen_name} [{verified_str} • {fol_str}{role_str}]"
 
 
-# ─────────────────────────────────────────────────────────────────
-# LEVEL 1: OVERVIEW STATS
-# ─────────────────────────────────────────────────────────────────
-
 def _bfs_cascade(article_tweet_ids: set, children_by_parent: dict) -> tuple[int, int]:
     """
     BFS from article roots through dataset-wide children index.
@@ -256,7 +243,6 @@ def _compute_overview_stats(
             pd.to_numeric(article_tweets["tweet_retweet_count"], errors="coerce").fillna(0).sum()
         )
 
-    # Resolve children index (fast path) or fall back to building from DataFrame.
     article_tweet_ids = (
         set(article_tweets["tweet_id"].astype(str))
         if "tweet_id" in article_tweets.columns else set()
@@ -277,7 +263,6 @@ def _compute_overview_stats(
     stats["total_replies"] = total_replies
     stats["cascade_depth"] = cascade_depth
 
-    # Time spread + peak engagement
     if "tweet_created_at" in article_tweets.columns:
         timestamps = pd.to_datetime(
             article_tweets["tweet_created_at"], unit="s", errors="coerce"
@@ -298,7 +283,6 @@ def _compute_overview_stats(
                     if len(counts) > 0:
                         stats["peak_engagement_hours"] = float(edges[int(counts.argmax())])
 
-    # Verified / followers
     user_ids = article_tweets["user_id"].astype(str).unique() if "user_id" in article_tweets.columns else []
     verified_users: list[float] = []
     all_followers: list[float] = []
@@ -317,7 +301,6 @@ def _compute_overview_stats(
     stats["avg_followers_verified"] = float(np.mean(verified_users)) if verified_users else 0.0
     stats["avg_followers_all"] = float(np.mean(all_followers)) if all_followers else 0.0
 
-    # Sentiment (keyword-based placeholder; replace with VADER/NRC for prod)
     supportive = skeptical = 0
     if "tweet_text" in article_tweets.columns:
         for text in article_tweets["tweet_text"].astype(str):
@@ -340,10 +323,6 @@ def _compute_overview_stats(
     return stats
 
 
-# ─────────────────────────────────────────────────────────────────
-# IMPACT SCORE
-# ─────────────────────────────────────────────────────────────────
-
 def _compute_tweet_impact_score(tweet_row, user_row) -> float:
     """
     Impact score combining engagement (60%), source authority (30%), recency placeholder (10%).
@@ -354,7 +333,7 @@ def _compute_tweet_impact_score(tweet_row, user_row) -> float:
     replies = _safe_num(tweet_row.get("reply_count", 0)) if hasattr(tweet_row, "get") else 0.0
 
     engagement_raw = (retweets * 3.0) + (likes * 1.0) + (replies * 0.5)
-    engagement_score = math.log1p(engagement_raw) / 10.0  # ~[0, 1]
+    engagement_score = math.log1p(engagement_raw) / 10.0
 
     if user_row is not None:
         verified_bonus = 0.3 if _is_verified(user_row) else 0.0
@@ -364,14 +343,10 @@ def _compute_tweet_impact_score(tweet_row, user_row) -> float:
     else:
         authority_score = 0.0
 
-    recency_score = 0.0  # ranking happens via _impact_score sort, not in scoring
+    recency_score = 0.0
 
     return float(engagement_score * 0.60 + authority_score * 0.30 + recency_score * 0.10)
 
-
-# ─────────────────────────────────────────────────────────────────
-# MAIN: build_social_context (3-level)
-# ─────────────────────────────────────────────────────────────────
 
 def build_social_context(
     user_id: int,
@@ -405,13 +380,10 @@ def build_social_context(
     if article_tweets is None or len(article_tweets) == 0:
         return ""
 
-    # Use the prebuilt children index for O(reachable) cascade BFS — avoids iterating
-    # the full replies DataFrame on every article (was the 5s/article bottleneck).
     children_by_parent = data.get("children_by_parent") or {}
 
     parts: list[str] = ["[SOCIAL CONTEXT]"]
 
-    # ── LEVEL 1: OVERVIEW ──────────────────────────────────────
     if include_overview:
         cache_key = (user_id, dataset_id, aid_str)
         stats = _overview_cache.get(cache_key)
@@ -451,8 +423,6 @@ def build_social_context(
             )
         parts.append("")
 
-    # ── LEVEL 2: TOP REACTIONS (by impact) ─────────────────────
-    # Vectorized impact score — apply(axis=1) was a hot-spot at 5s/article.
     article_tweets = article_tweets.copy()
     n_rows = len(article_tweets)
 
@@ -488,7 +458,6 @@ def build_social_context(
 
     parts.append("=== TOP REACTIONS (by impact) ===")
 
-    # Pre-compute first_tweet_time for relative timestamps
     first_tweet_time = None
     if "tweet_created_at" in article_tweets.columns:
         ts_series = pd.to_datetime(
@@ -530,7 +499,6 @@ def build_social_context(
         parts.append(f"   {time_str}{engagement_str}")
         parts.append(f'   "{tweet_text}"')
 
-        # Notable thread (top reply) — controlled by n_replies_per_tweet
         if n_replies_per_tweet > 0 and tweet_replies is not None and len(tweet_replies) > 0:
             top_reply = tweet_replies.nlargest(1, "like_count").iloc[0]
             reply_text = str(top_reply.get("reply_text", "") or "").strip().replace("\n", " ")
@@ -549,7 +517,6 @@ def build_social_context(
 
         parts.append("")
 
-    # ── LEVEL 3: MINORITY VOICES ───────────────────────────────
     if include_minority_voices:
         top_tweet_ids = set(top_tweets["tweet_id"].astype(str)) if "tweet_id" in top_tweets.columns else set()
 

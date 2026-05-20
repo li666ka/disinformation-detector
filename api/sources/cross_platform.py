@@ -1,4 +1,3 @@
-# api/sources/cross_platform.py
 """
 Cross-platform verification service.
 
@@ -34,13 +33,6 @@ from . import get_source
 logger = logging.getLogger(__name__)
 
 
-# ─────────────────────────────────────────────────────────────────────────
-#  PATCH для api/sources/cross_platform.py
-#
-#  Замінити функцію extract_keywords_from_title (близько рядка 775)
-#  на версію нижче.
-# ─────────────────────────────────────────────────────────────────────────
-
 import re
 
 _TITLE_PREFIX_RE = re.compile(
@@ -49,37 +41,27 @@ _TITLE_PREFIX_RE = re.compile(
     flags=re.IGNORECASE,
 )
 
-# Latin-script токен; дозволяємо внутрішні дефіси/апострофи,
-# щоб "COVID-19", "don't", "state-of-the-art" бралися цілком.
 _WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9'’\-]*")
 
 _STOP_WORDS = frozenset({
-    # Articles / determiners
     "the", "a", "an", "this", "that", "these", "those", "such", "some", "any",
     "all", "every", "each", "no", "other", "another",
-    # Pronouns
     "i", "you", "he", "she", "it", "we", "they", "me", "him", "her", "us",
     "them", "my", "your", "his", "its", "our", "their", "mine", "yours",
     "one", "ones", "who", "whom", "whose",
-    # Conjunctions
     "and", "or", "but", "nor", "yet", "so", "if", "than", "because", "while",
     "although", "though", "whereas", "since",
-    # Common prepositions
     "in", "on", "at", "to", "for", "of", "with", "by", "from", "as", "into",
     "onto", "upon", "about", "against", "between", "through", "during",
     "before", "after", "above", "below", "over", "under", "near", "off",
     "out", "up", "down", "across", "along",
-    # Auxiliaries / common verbs
     "is", "was", "are", "were", "be", "been", "being", "am",
     "have", "has", "had", "having",
     "do", "does", "did", "doing", "done",
     "will", "would", "shall", "should", "can", "could", "may", "might", "must",
-    # Newsy fillers
     "says", "said", "saying", "told", "tells", "report", "reports", "reported",
     "reportedly", "according", "amid", "amidst", "despite", "plus",
-    # Wh-words
     "what", "which", "when", "where", "why", "how",
-    # Other frequent low-signal words
     "also", "just", "still", "only", "even", "now", "then", "here", "there",
     "too", "very", "more", "most", "less", "many", "much", "few",
     "get", "gets", "got", "make", "makes", "made", "take", "takes", "took",
@@ -133,20 +115,13 @@ def extract_keywords_from_title(title: str, max_keywords: int = 4) -> str:
             continue
         seen.add(lw)
 
-        # Акронім: короткий токен, всі літери великі (UN, NATO, SCOTUS)
         if w.isupper() and 2 <= len(w) <= 6:
             acronyms.append(w)
-        # Власна назва / title-case (перша велика, решта — ні)
         elif w[0].isupper() and not w.isupper():
             proper.append(w)
         elif len(w) >= 5:
             content.append(w)
 
-    # Адаптивний вибір:
-    #   - якщо є ≥2 named entities (акроніми + TitleCase) — повертаємо їх (precision-orient):
-    #     2-3 entity-токени + 1 content-слово якщо є.
-    #   - інакше — звичайний top-N (recall-orient), щоб не повертати порожнє коли
-    #     заголовок узагалі без власних назв ("vaccine causes autism").
     entities = acronyms + proper
     if len(entities) >= 2:
         result = entities[:3]
@@ -203,16 +178,13 @@ async def verify_news(
     if social_sources is None:
         social_sources = ["bluesky", "mastodon"]
 
-    # Build search query
     title = news_item.title or news_item.text[:200]
     query = extract_keywords_from_title(title)
     if not query:
-        # Fallback: перші 5 слів з тексту
         query = " ".join(news_item.text.split()[:5])
 
     logger.info(f"verify_news: searching '{query}' on {social_sources}")
 
-    # Fetch posts concurrently
     async def _search_one(src_name: str):
         try:
             src = get_source(src_name)
@@ -229,14 +201,12 @@ async def verify_news(
         return_exceptions=False,
     )
 
-    # Flatten
     all_posts: list[NewsItem] = []
     by_source: dict[str, list[NewsItem]] = {}
     for src_name, posts in results:
         by_source[src_name] = posts
         all_posts.extend(posts)
 
-    # ── Compute stats ─────────────────────────────────────────────────────
     stats = _compute_stats(news_item, all_posts, by_source)
     signals = _detect_signals(stats, all_posts)
 
@@ -257,15 +227,12 @@ def _compute_stats(
     """Aggregate statistics across related posts."""
     total = len(all_posts)
 
-    # By source counts
     source_counts = {src: len(posts) for src, posts in by_source.items()}
 
-    # Engagement aggregates
     total_likes = sum((p.likes_count or 0) for p in all_posts)
     total_reposts = sum((p.reposts_count or 0) for p in all_posts)
     total_replies = sum((p.replies_count or 0) for p in all_posts)
 
-    # Verified authors ratio
     posts_with_verified_info = [p for p in all_posts if p.author_is_verified is not None]
     verified_count = sum(1 for p in posts_with_verified_info if p.author_is_verified)
     verified_ratio = (
@@ -274,7 +241,6 @@ def _compute_stats(
         else None
     )
 
-    # Custom domain ratio (Bluesky-specific signal of trusted accounts)
     posts_with_cd_info = [p for p in all_posts if p.author_has_custom_domain is not None]
     cd_count = sum(1 for p in posts_with_cd_info if p.author_has_custom_domain)
     custom_domain_ratio = (
@@ -283,17 +249,14 @@ def _compute_stats(
         else None
     )
 
-    # Account age
     ages = [p.author_account_age_days for p in all_posts if p.author_account_age_days is not None]
     avg_age = sum(ages) / len(ages) if ages else None
     min_age = min(ages) if ages else None
 
-    # Followers
     followers = [p.author_followers_count for p in all_posts if p.author_followers_count is not None]
     avg_followers = sum(followers) / len(followers) if followers else None
     median_followers = sorted(followers)[len(followers) // 2] if followers else None
 
-    # Domain matching — how many posts mention the original source's domain
     original_domain = extract_domain(original.url)
     domain_mentions = 0
     if original_domain:
@@ -301,11 +264,9 @@ def _compute_stats(
             if original_domain in p.text.lower():
                 domain_mentions += 1
 
-    # URL presence
     with_url = sum(1 for p in all_posts if p.has_url_in_text)
     url_ratio = with_url / total if total else 0
 
-    # Reply ratio (are these organic posts or replies?)
     reply_count = sum(1 for p in all_posts if p.is_reply)
     reply_ratio = reply_count / total if total else 0
 
@@ -347,7 +308,6 @@ def _detect_signals(stats: dict, posts: list[NewsItem]) -> list[dict]:
         })
         return signals
 
-    # Low verified ratio
     verified_pct = stats.get("verified_authors_pct")
     if verified_pct is not None and verified_pct < 10 and total >= 5:
         signals.append({
@@ -357,7 +317,6 @@ def _detect_signals(stats: dict, posts: list[NewsItem]) -> list[dict]:
             "note": f"Лише {verified_pct}% авторів мають верифікацію",
         })
 
-    # Many very young accounts (< 30 days)
     young_posts = [p for p in posts if p.author_account_age_days is not None and p.author_account_age_days < 30]
     if len(young_posts) / total >= 0.3 and total >= 5:
         signals.append({
@@ -367,7 +326,6 @@ def _detect_signals(stats: dict, posts: list[NewsItem]) -> list[dict]:
             "note": f"{len(young_posts)} з {total} постів від акаунтів молодше 30 днів (можливі боти)",
         })
 
-    # Many low-follower accounts
     low_follower_posts = [
         p for p in posts
         if p.author_followers_count is not None and p.author_followers_count < 50
@@ -380,7 +338,6 @@ def _detect_signals(stats: dict, posts: list[NewsItem]) -> list[dict]:
             "note": f"Половина або більше авторів мають <50 фоловерів",
         })
 
-    # Domain mentions (link back to source)
     domain_mentions = stats.get("domain_mentioned_count", 0)
     if stats.get("original_domain") and total >= 5:
         if domain_mentions == 0:
@@ -397,7 +354,6 @@ def _detect_signals(stats: dict, posts: list[NewsItem]) -> list[dict]:
                 "note": f"{domain_mentions} з {total} постів згадують оригінальне джерело",
             })
 
-    # High engagement without source verification
     total_engagement = (
         stats["total_engagement"]["likes"]
         + stats["total_engagement"]["reposts"]
@@ -411,7 +367,6 @@ def _detect_signals(stats: dict, posts: list[NewsItem]) -> list[dict]:
             "note": f"Висока залученість ({total_engagement}) без посилань на першоджерело — віральний контент з неперевірених акаунтів",
         })
 
-    # Multiple platforms discussing (positive signal)
     by_source = stats.get("by_source", {})
     active_sources = [s for s, n in by_source.items() if n > 0]
     if len(active_sources) >= 2:

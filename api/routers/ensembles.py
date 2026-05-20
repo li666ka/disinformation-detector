@@ -28,8 +28,6 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/ensembles", tags=["ensembles"])
 
 
-# ── Predictions JSON helpers (single source of truth = ModelRecord.predictions_json) ──
-
 def _has_predictions(model: ModelRecord) -> bool:
     return bool(model.predictions_json and model.predictions_json.strip())
 
@@ -57,7 +55,7 @@ def _load_member(model: ModelRecord) -> dict:
         "y_true": np.array(data.get("y_true", []), dtype=np.int64),
         "y_pred": np.array(data.get("y_pred", []), dtype=np.int64),
         "y_proba_fake": np.array(data.get("y_proba_fake", []), dtype=np.float32),
-        "metrics": {},  # окремо у model.metrics_json
+        "metrics": {},
         "splits_used": data.get("splits_used", model.splits_used or ""),
         "dataset_id": str(data.get("dataset_id", model.dataset_id or "")),
         "model_type": data.get("model_type", model.model_type),
@@ -78,8 +76,6 @@ def _model_extra_metrics(record: ModelRecord) -> tuple[Optional[float], Optional
     except Exception:
         return None, None
 
-
-# ── Endpoints ───────────────────────────────────────────────────────────
 
 @router.get("/eligible-models")
 def list_eligible_models(
@@ -137,7 +133,6 @@ def create_ensemble(
     if missing:
         raise HTTPException(status_code=404, detail=f"Models not found: {missing}")
 
-    # ── Validation: same splits_used ──
     splits = {m.splits_used for m in models if m.splits_used}
     if len(splits) > 1:
         raise HTTPException(
@@ -149,13 +144,11 @@ def create_ensemble(
         )
     splits_used = splits.pop() if splits else None
 
-    # ── Soft check: dataset ──
     datasets = {m.dataset_id for m in models if m.dataset_id}
     if len(datasets) > 1:
         logger.warning(f"Mixed dataset_ids in ensemble: {datasets}")
     dataset_id = next(iter(datasets), None)
 
-    # ── Load predictions у тому ж порядку, що member_model_ids ──
     by_id = {m.id: m for m in models}
     members_data = [_load_member(by_id[mid]) for mid in req.member_model_ids]
 
@@ -169,7 +162,6 @@ def create_ensemble(
             ),
         )
 
-    # ── Voting ──
     try:
         result = evaluate_ensemble(
             voting_type=req.voting_type,
@@ -404,8 +396,6 @@ def re_evaluate_ensemble(
 
     return _serialize_ensemble(ensemble, models)
 
-
-# ── Serializer ──────────────────────────────────────────────────────────
 
 def _serialize_ensemble(
     ensemble: Ensemble,

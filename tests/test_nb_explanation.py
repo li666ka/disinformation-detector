@@ -63,10 +63,8 @@ def test_fake_text_attribution_positive():
     assert explanation is not None
     assert explanation["method"] == "log_odds"
     assert explanation["prediction"] == "FAKE"
-    # Найвпливовіший токен має бути позитивний (FAKE-direction)
     top = explanation["tokens"][0]
     assert top["attribution"] > 0
-    # "shocking" має бути серед топу
     top_tokens = [t["token"] for t in explanation["tokens"][:5]]
     assert "shocking" in top_tokens
 
@@ -79,7 +77,6 @@ def test_real_text_attribution_negative():
     assert explanation is not None
     assert explanation["prediction"] == "REAL"
     assert explanation["total_log_odds"] < 0
-    # Топ-токен має бути в REAL-напрямку (від'ємний)
     assert explanation["tokens"][0]["attribution"] < 0
 
 
@@ -118,7 +115,6 @@ def test_top_k_respected():
     )
     assert expl is not None
     assert len(expl["tokens"]) <= 3
-    # сортування за |attribution|
     abs_attrs = [abs(t["attribution"]) for t in expl["tokens"]]
     assert abs_attrs == sorted(abs_attrs, reverse=True)
 
@@ -128,5 +124,4 @@ def test_n_features_used_counts_all_nonzero_tokens():
     model = _make_model(vec, clf)
     expl = model.explain_nb_prediction("shocking new evidence revealed", top_k=2)
     assert expl is not None
-    # top_k обмежує `tokens`, але n_features_used рахує всі non-zero
     assert expl["n_features_used"] >= len(expl["tokens"])

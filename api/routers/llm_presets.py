@@ -1,4 +1,3 @@
-# api/routers/llm_presets.py
 """
 Endpoints for LLM preset management.
 
@@ -38,8 +37,6 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/llm-presets", tags=["llm-presets"])
 
 
-# ── GET defaults ──────────────────────────────────────────────────────────
-
 @router.get("/defaults")
 def get_defaults(_: User = Depends(get_current_user)):
     """
@@ -56,8 +53,6 @@ def get_defaults(_: User = Depends(get_current_user)):
         "default_max_output_tokens": 200,
     }
 
-
-# ── POST test (preview before save) ───────────────────────────────────────
 
 @router.post("/test", response_model=LLMPresetTestResponse)
 def test_preset_config(
@@ -87,7 +82,6 @@ def test_preset_config(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except RuntimeError as e:
-        # SDK not installed
         raise HTTPException(status_code=500, detail=str(e))
     except Exception as e:
         logger.exception("test_preset_config failed")
@@ -103,8 +97,6 @@ def test_preset_config(
     )
 
 
-# ── POST create (save) ────────────────────────────────────────────────────
-
 @router.post("", response_model=ModelRecordResponse, status_code=201)
 def create_preset(
     req: LLMPresetCreate,
@@ -112,7 +104,6 @@ def create_preset(
     _: User = Depends(get_current_user),
 ):
     """Save LLM preset as a ModelRecord (model_type='llm')."""
-    # Check unique name within user's presets (optional — we use global unique)
     existing = db.query(ModelRecord).filter(
         ModelRecord.name == req.name,
         ModelRecord.model_type == "llm",
@@ -123,7 +114,6 @@ def create_preset(
             detail=f"LLM preset with name '{req.name}' already exists",
         )
 
-    # Build config dict, trim unused fields
     config = {
         "base_model": req.base_model,
         "mode": req.mode,
@@ -139,7 +129,6 @@ def create_preset(
         config["cot_instruction"] = req.cot_instruction or DEFAULT_COT_INSTRUCTION
     elif req.mode == "bagging":
         config["bagging_n_calls"] = req.bagging_n_calls or 3
-        # Force min 0.7 for bagging diversity
         config["temperature"] = max(config["temperature"], 0.7)
 
     record = ModelRecord(
@@ -157,8 +146,6 @@ def create_preset(
     logger.info(f"Created LLM preset: id={record.id}, name={req.name}, mode={req.mode}")
     return record
 
-
-# ── POST random samples for few-shot picker ───────────────────────────────
 
 @router.post("/random-samples", response_model=RandomSamplesResponse)
 def get_random_samples(
@@ -249,8 +236,6 @@ def get_random_samples(
     return RandomSamplesResponse(examples=examples)
 
 
-# ── PATCH (rename) ────────────────────────────────────────────────────────
-
 @router.patch("/{preset_id}", response_model=ModelRecordResponse)
 def update_preset(
     preset_id: int,
@@ -287,8 +272,6 @@ def update_preset(
         logger.info(f"Renamed LLM preset id={preset_id} -> '{new_name}'")
     return record
 
-
-# ── DELETE ────────────────────────────────────────────────────────────────
 
 @router.delete("/{preset_id}")
 def delete_preset(

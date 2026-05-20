@@ -14,8 +14,6 @@ from unittest.mock import patch
 
 import pytest
 
-# Дозволяємо API key бути порожнім — _get_api_key() читає env, тому
-# виставляємо stub для всіх тестів.
 os.environ.setdefault("GOOGLE_FACT_CHECK_API_KEY", "test-key-fake")
 
 from api import fact_check
@@ -24,9 +22,6 @@ from api.fact_check import (
     _similarity,
     fact_check_claim,
 )
-
-
-# ── Pure helpers ─────────────────────────────────────────────────────────
 
 
 def test_similarity_token_overlap_beats_char_ratio():
@@ -71,16 +66,12 @@ def test_build_query_trims_to_six_content_words():
     )
     words = q.split()
     assert len(words) <= 6
-    # Stopwords ("the", "in") мають вилетіти першими
     assert "the" not in [w.lower() for w in words]
 
 
 def test_build_query_empty():
     assert _build_factcheck_query("") == ""
     assert _build_factcheck_query("   ") == ""
-
-
-# ── fact_check_claim з мокнутим Google API ───────────────────────────────
 
 
 def _mock_google_response(claims: list[dict], status: int = 200):

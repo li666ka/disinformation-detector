@@ -4,7 +4,6 @@ from typing import Optional, Literal, Annotated, Union
 import pydantic
 
 
-# ── Auth ────────────────────────────────────────────────────────────────
 class RegisterRequest(BaseModel):
     username: str
     email: EmailStr
@@ -30,7 +29,6 @@ class UserResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
-# ── Experiments ─────────────────────────────────────────────────────────
 class ExperimentResponse(BaseModel):
     id: int
     experiment_id: str
@@ -49,34 +47,30 @@ class ExperimentResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
-# ── Models ──────────────────────────────────────────────────────────────
 class ModelRecordResponse(BaseModel):
     id: int
     experiment_id: Optional[str] = None
-    filename: Optional[str] = None   # LLM presets have no file
-    name: str                         # required for all records
+    filename: Optional[str] = None
+    name: str
     model_type: str
-    pipeline_type: str = "tweet"      # "tweet" | "article" | "aggregated"
+    pipeline_type: str = "tweet"
     accuracy: Optional[float] = None
     precision: Optional[float] = None
     recall: Optional[float] = None
     f1_score: Optional[float] = None
-    # Extra metrics — заповнюються із metrics_json через _enrich_with_metrics_json.
-    # Не зберігаються окремими SQL колонками: source of truth — metrics_json.
     f1_macro: Optional[float] = None
     roc_auc: Optional[float] = None
     metrics_json: Optional[str] = None
     is_active: bool
-    splits_used: Optional[str] = None  # "in_domain" | "cross_domain" | "mixed" | NULL
+    splits_used: Optional[str] = None
     dataset_id: Optional[int] = None
-    dataset_name: Optional[str] = None  # резолвиться у serializer (не SQL колонка)
-    llm_config: Optional[str] = None  # JSON string for LLM presets
+    dataset_name: Optional[str] = None
+    llm_config: Optional[str] = None
     created_at: datetime
 
     model_config = {"from_attributes": True}
 
 
-# ── LLM Presets ─────────────────────────────────────────────────────────
 AVAILABLE_BASE_MODELS = [
     "claude-haiku-4-5",
     "claude-sonnet-4-6",
@@ -174,8 +168,6 @@ class RandomSamplesResponse(BaseModel):
     examples: list[FewShotExample]
 
 
-# ── Prediction ─────────────────────────────────────────────────────────
-
 class AdditionalFeatures(BaseModel):
     groups: list[str]
     mask: dict[str, bool]
@@ -206,8 +198,8 @@ class DeBERTaConfig(BaseModel):
 
 class LLMConfig(BaseModel):
     model: Literal["llm"]
-    preset_id: Optional[int] = None   # reference to ModelRecord.id
-    mode: str = "zero_shot"            # fallback for old inline configs
+    preset_id: Optional[int] = None
+    mode: str = "zero_shot"
     additional_features: Optional[AdditionalFeatures] = None
 
 
@@ -284,21 +276,20 @@ class PredictRequest(BaseModel):
     metadata: Optional[PostMetadata] = None
 
 
-# ── Ensembles ───────────────────────────────────────────────────────────
 VOTING_TYPES = ["hard", "soft", "weighted"]
 
 
 class EnsembleMemberRef(BaseModel):
     """Reference до моделі-члена ансамблю."""
     model_id: int
-    weight: Optional[float] = None  # тільки для weighted voting
+    weight: Optional[float] = None
 
 
 class EnsembleCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=100)
     voting_type: Literal["hard", "soft", "weighted"]
     member_model_ids: list[int] = Field(..., min_length=2)
-    weights: Optional[dict[str, float]] = None  # {"model_id_str": weight}
+    weights: Optional[dict[str, float]] = None
 
     @field_validator("weights")
     @classmethod
@@ -330,7 +321,6 @@ class EnsembleResponse(BaseModel):
     member_model_ids: list[int]
     weights: Optional[dict[str, float]] = None
 
-    # Member details (для UI)
     member_models: Optional[list[dict]] = None
 
     accuracy: Optional[float] = None

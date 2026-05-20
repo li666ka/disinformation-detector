@@ -20,10 +20,6 @@ from api.llm_social_context import (
 )
 
 
-# ─────────────────────────────────────────────────────────────────
-# _compute_overview_stats
-# ─────────────────────────────────────────────────────────────────
-
 def test_overview_stats_basic():
     tweets = pd.DataFrame([
         {
@@ -68,10 +64,6 @@ def test_overview_cascade_depth():
     assert stats["cascade_depth"] == 3
 
 
-# ─────────────────────────────────────────────────────────────────
-# _compute_tweet_impact_score
-# ─────────────────────────────────────────────────────────────────
-
 def test_impact_score_verified_boost():
     tweet = pd.Series({"like_count": 100, "tweet_retweet_count": 50, "reply_count": 0})
     user_normal = pd.Series({"user_verified": False, "user_followers_count": 1000})
@@ -96,10 +88,6 @@ def test_impact_score_no_user():
     assert score >= 0
     assert isinstance(score, float)
 
-
-# ─────────────────────────────────────────────────────────────────
-# build_social_context — using stubbed _load_dataset_files
-# ─────────────────────────────────────────────────────────────────
 
 def _stub_dataset(tweets_by_article, replies_by_tweet, users_lookup, replies=None):
     def _load(_user_id, _dataset_id):
@@ -178,9 +166,7 @@ def test_build_social_context_three_levels():
     assert "=== OVERVIEW ===" in ctx
     assert "=== TOP REACTIONS" in ctx
     assert "=== MINORITY VOICES" in ctx
-    # Top reaction should be the high-impact verified user
     assert "@alice" in ctx
-    # Minority voice should mention the skeptical low-impact tweet
     assert "carol" in ctx or "fake" in ctx.lower()
 
 
@@ -229,10 +215,6 @@ def test_build_social_context_backward_compat_default_args():
     assert ctx.startswith("[SOCIAL CONTEXT]")
     assert "@alice" in ctx
 
-
-# ─────────────────────────────────────────────────────────────────
-# Standalone runner
-# ─────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     import traceback

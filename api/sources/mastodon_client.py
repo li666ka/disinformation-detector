@@ -1,4 +1,3 @@
-# api/sources/mastodon_client.py
 """
 Mastodon адаптер з повною підтримкою post details.
 
@@ -77,7 +76,6 @@ class MastodonSource(BaseNewsSource):
     def can_handle_url(self, url: str) -> bool:
         return bool(MASTODON_URL_RE.search(url))
 
-    # ── Public: basic ───────────────────────────────────────────────────
 
     async def search(self, query: str, limit: int = 20) -> list[NewsItem]:
         def _sync():
@@ -99,8 +97,6 @@ class MastodonSource(BaseNewsSource):
         def _sync():
             client = self._get_client()
             try:
-                # mastodon.social disables the public timeline API (returns []),
-                # so try it first and fall back to trending statuses
                 statuses = client.timeline_public(local=False, limit=limit)
                 if statuses:
                     return statuses
@@ -121,9 +117,6 @@ class MastodonSource(BaseNewsSource):
         def _sync():
             client = self._get_client()
             try:
-                # Mastodon.py `search_v2` не приймає `limit` (це search через
-                # accounts/statuses/hashtags разом; обмежується самим API).
-                # Беремо перший status зі статичного списку.
                 result = client.search_v2(q=url, resolve=True)
                 statuses = result.get("statuses", []) if result else []
                 return statuses[0] if statuses else None
@@ -133,7 +126,6 @@ class MastodonSource(BaseNewsSource):
         status = await asyncio.to_thread(_sync)
         return self._parse_status(status) if status else None
 
-    # ── Public: post details ────────────────────────────────────────────
 
     async def get_post_details(
         self,
@@ -152,7 +144,6 @@ class MastodonSource(BaseNewsSource):
         if not status_id:
             return None
 
-        # Fetch status + context + reblogged_by + favourited_by in parallel
         status_task = asyncio.create_task(self._fetch_status(status_id))
         context_task = asyncio.create_task(self._fetch_context(status_id, max_replies))
         reblogged_task = asyncio.create_task(self._fetch_reblogged_by(status_id, max_reposters))
@@ -177,7 +168,7 @@ class MastodonSource(BaseNewsSource):
             replies=replies,
             reposted_by=reposted_by,
             liked_by=liked_by,
-            quoted_by=[],  # Mastodon doesn't have quote posts
+            quoted_by=[],
             stats={
                 "likers": analyze_user_profiles(liked_by),
                 "reposters": analyze_user_profiles(reposted_by),
@@ -202,10 +193,8 @@ class MastodonSource(BaseNewsSource):
         if re.match(r"^\d+$", post_id):
             return post_id
 
-        # URL form
         match = MASTODON_URL_RE.search(post_id)
         if match:
-            # May be on a foreign instance — resolve via search
             def _sync():
                 client = self._get_client()
                 try:
@@ -245,7 +234,6 @@ class MastodonSource(BaseNewsSource):
                 return []
 
         descendants = await asyncio.to_thread(_sync)
-        # Direct replies only (where in_reply_to_id == status_id)
         direct_replies = [
             d for d in descendants
             if str(d.get("in_reply_to_id", "")) == str(status_id)
@@ -267,7 +255,6 @@ class MastodonSource(BaseNewsSource):
             client = self._get_client()
             all_accounts = []
             try:
-                # Mastodon.py paginates via fetch_next; status_reblogged_by has no `limit` param
                 page = client.status_reblogged_by(status_id)
                 while page and len(all_accounts) < max_reposters:
                     all_accounts.extend(page)
@@ -294,7 +281,6 @@ class MastodonSource(BaseNewsSource):
             client = self._get_client()
             all_accounts = []
             try:
-                # status_favourited_by does not accept a `limit` kwarg in Mastodon.py
                 page = client.status_favourited_by(status_id)
                 while page and len(all_accounts) < max_likers:
                     all_accounts.extend(page)
@@ -313,7 +299,6 @@ class MastodonSource(BaseNewsSource):
         profiles = [self._account_to_user_profile(a) for a in raw[:max_likers]]
         return profiles, len(profiles)
 
-    # ── Parsing ──────────────────────────────────────────────────────────
 
     def _parse_reply(self, status: dict) -> Optional[Reply]:
         """Parse a reply status → Reply."""
@@ -360,7 +345,6 @@ class MastodonSource(BaseNewsSource):
             created_at = created_at.isoformat()
         age_days = compute_account_age_days(created_at) if created_at else None
 
-        # Verification via fields[].verified_at
         is_verified = False
         for fld in account.get("fields", []) or []:
             if fld.get("verified_at"):
@@ -397,7 +381,6 @@ class MastodonSource(BaseNewsSource):
             return None
 
         try:
-            # If this is a boost/reblog, use the original status for content
             reblog = status.get("reblog")
             content_status = reblog if reblog else status
 
@@ -409,7 +392,6 @@ class MastodonSource(BaseNewsSource):
             if not text:
                 return None
 
-            # For reblogs: author is the original poster, not the booster
             account = content_status.get("account") or {}
             author_display = account.get("display_name") or None
             acct = account.get("acct") or None

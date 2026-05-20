@@ -1,4 +1,3 @@
-# api/claim_extractor.py
 """
 Claim extraction for fact_check.py — синхронний інтерфейс.
 
@@ -44,10 +43,6 @@ Respond ONLY with valid JSON, no prose:
 """
 
 
-# ──────────────────────────────────────────────────────────────────────────
-# Public API
-# ──────────────────────────────────────────────────────────────────────────
-
 def extract_claims(text: str, use_llm: bool = True) -> dict:
     """
     Sync extraction. Try Claude CLI first; fall back to regex on any failure.
@@ -64,10 +59,6 @@ def extract_claims(text: str, use_llm: bool = True) -> dict:
 
     return {"claims": _extract_via_regex(text), "method": "fallback"}
 
-
-# ──────────────────────────────────────────────────────────────────────────
-# Claude subprocess path
-# ──────────────────────────────────────────────────────────────────────────
 
 def _extract_via_claude(text: str) -> list[dict]:
     try:
@@ -175,10 +166,6 @@ def _stance_to_author_verdict(stance: str) -> str:
         return "FAKE"
     return "MIXED"
 
-
-# ──────────────────────────────────────────────────────────────────────────
-# Regex fallback (no LLM)
-# ──────────────────────────────────────────────────────────────────────────
 
 _FACTUAL_VERB_RE = re.compile(
     r'\b(is|are|was|were|has|have|had|will|did|does|do|cause|causes|caused|'

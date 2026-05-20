@@ -1,4 +1,4 @@
-// ui/src/PostDetailsModal.tsx
+
 import React, { useState, useEffect } from "react";
 import api from "./api";
 import { cn } from "./lib/utils";
@@ -77,10 +77,10 @@ export default function PostDetailsModal({ open, onClose, postId }: PostDetailsM
 
                 {data && !loading && (
                     <div className="space-y-4">
-                        {/* Fetched limits info */}
+                        {}
                         {data.fetched_limits && <FetchedLimitsInfo limits={data.fetched_limits} />}
 
-                        {/* Tabs for different participant types */}
+                        {}
                         <Tabs value={activeTab} onValueChange={setActiveTab}>
                             <TabsList className="grid w-full grid-cols-4">
                                 <TabsTrigger value="replies" className="gap-1.5">
@@ -101,7 +101,7 @@ export default function PostDetailsModal({ open, onClose, postId }: PostDetailsM
                                 </TabsTrigger>
                             </TabsList>
 
-                            {/* Replies */}
+                            {}
                             <TabsContent value="replies" className="space-y-3 mt-4">
                                 {data.stats?.repliers && (
                                     <StatsPanel stats={data.stats.repliers} label="Профіль авторів коментарів" />
@@ -115,7 +115,7 @@ export default function PostDetailsModal({ open, onClose, postId }: PostDetailsM
                                 )}
                             </TabsContent>
 
-                            {/* Reposters */}
+                            {}
                             <TabsContent value="reposts" className="space-y-3 mt-4">
                                 {data.stats?.reposters && (
                                     <StatsPanel stats={data.stats.reposters} label="Профіль репостерів" />
@@ -129,7 +129,7 @@ export default function PostDetailsModal({ open, onClose, postId }: PostDetailsM
                                 )}
                             </TabsContent>
 
-                            {/* Likers */}
+                            {}
                             <TabsContent value="likes" className="space-y-3 mt-4">
                                 {data.stats?.likers && (
                                     <StatsPanel stats={data.stats.likers} label="Профіль лайкерів" />
@@ -143,7 +143,7 @@ export default function PostDetailsModal({ open, onClose, postId }: PostDetailsM
                                 )}
                             </TabsContent>
 
-                            {/* Quoters (Bluesky only) */}
+                            {}
                             <TabsContent value="quotes" className="space-y-3 mt-4">
                                 {data.stats?.quoters && (
                                     <StatsPanel stats={data.stats.quoters} label="Профіль цитаторів" />
@@ -164,7 +164,6 @@ export default function PostDetailsModal({ open, onClose, postId }: PostDetailsM
     );
 }
 
-// ── Subcomponents ─────────────────────────────────────────────────────────
 
 function EmptyState({ message }: { message: string }) {
     return (
@@ -198,7 +197,7 @@ function FetchedLimitsInfo({ limits }: { limits: PostDetailsResponse["fetched_li
 function StatsPanel({ stats, label }: { stats: ProfileGroupStats; label: string }) {
     if (!stats || stats.total === 0) return null;
 
-    // Detect warning signals
+
     const warnings: string[] = [];
     if (stats.young_accounts_30d_pct != null && stats.young_accounts_30d_pct >= 30) {
         warnings.push(`${stats.young_accounts_30d_pct}% акаунтів молодше 30 днів`);
@@ -381,7 +380,7 @@ function ReplyCard({ reply }: { reply: Reply }) {
     return (
         <Card className="hover:bg-muted/30 transition-colors">
             <CardContent className="p-3 space-y-2">
-                {/* Author row */}
+                {}
                 {reply.author && (
                     <div className="flex items-center gap-1.5 flex-wrap">
                         <span className="text-xs font-medium truncate">
@@ -420,10 +419,10 @@ function ReplyCard({ reply }: { reply: Reply }) {
                     </div>
                 )}
 
-                {/* Text */}
+                {}
                 <p className="text-sm leading-snug">{text}</p>
 
-                {/* Engagement + author metadata */}
+                {}
                 <div className="flex items-center gap-3 text-[10px] text-muted-foreground flex-wrap">
                     {reply.likes_count != null && (
                         <span className="flex items-center gap-0.5">

@@ -20,23 +20,18 @@ import pandas as pd
 
 logger = logging.getLogger(__name__)
 
-# ── Configuration ────────────────────────────────────────────────────────
 
-# Project root / datasets folder
 BASE_PATH = Path(__file__).parent.parent.resolve()
 DATASETS_ROOT = BASE_PATH / "uploaded_datasets"
 
-# Upload limits
 MAX_ZIP_SIZE_MB = 500
 MAX_ZIP_SIZE_BYTES = MAX_ZIP_SIZE_MB * 1024 * 1024
 MAX_NEWS_ROWS = 100_000
 
-# Required/optional files in a dataset
 REQUIRED_FILES = ["news.csv"]
 OPTIONAL_FILES = ["tweets.csv", "retweets.csv", "replies.csv", "likes.csv", "users.csv", "evidence.csv"]
 ALL_FILES = REQUIRED_FILES + OPTIONAL_FILES
 
-# Required columns for each file
 REQUIRED_COLUMNS = {
     "news.csv":     ["article_id", "article_text", "article_label"],
     "tweets.csv":   ["tweet_id", "article_id"],
@@ -49,22 +44,16 @@ REQUIRED_COLUMNS = {
 
 VALID_LABELS = {"FAKE", "REAL"}
 
-# Safe filename pattern (prevent path traversal)
 SAFE_FILENAME_RE = re.compile(r"^[a-zA-Z0-9_.-]+$")
 
-# Splits structure: <splits_name>/split_<role>.csv where role ∈ {train, val, test}
 SPLIT_FOLDER_RE = re.compile(r"(?:^|/)(splits_[A-Za-z0-9_-]+)/split_(train|val|test)\.csv$")
 SPLIT_ROLES = ("train", "val", "test")
 
-
-# ── Exceptions ───────────────────────────────────────────────────────────
 
 class DatasetValidationError(Exception):
     """Raised when uploaded ZIP fails validation."""
     pass
 
-
-# ── Storage path helpers ─────────────────────────────────────────────────
 
 def get_dataset_folder(user_id: int, dataset_id: int) -> Path:
     """Return absolute folder path for a given dataset."""
@@ -77,8 +66,6 @@ def ensure_user_folder(user_id: int) -> Path:
     user_folder.mkdir(parents=True, exist_ok=True)
     return user_folder
 
-
-# ── ZIP validation ───────────────────────────────────────────────────────
 
 def validate_zip_structure(
     zip_bytes: bytes,
@@ -106,8 +93,6 @@ def validate_zip_structure(
     except zipfile.BadZipFile:
         raise DatasetValidationError("Файл не є валідним ZIP архівом")
 
-    # Build index {basename: internal_path}, skipping directories and hidden files
-    # This handles both `news.csv` at root AND `my-dataset/news.csv` inside a folder
     found: dict[str, str] = {}
     splits: dict[str, dict[str, str]] = {}
     for info in zf.infolist():
@@ -117,15 +102,13 @@ def validate_zip_structure(
         if not name or name.startswith(".") or name.startswith("__"):
             continue
 
-        # Path traversal protection — apply to всі шляхи нижче
         if ".." in info.filename or info.filename.startswith("/"):
             raise DatasetValidationError(f"Небезпечний шлях у ZIP: {info.filename}")
 
-        # Splits папки: <prefix>/splits_<name>/split_(train|val|test).csv
         normalized = info.filename.replace("\\", "/")
         m = SPLIT_FOLDER_RE.search(normalized)
         if m:
-            split_name = m.group(1)[len("splits_"):]  # e.g. "in_domain"
+            split_name = m.group(1)[len("splits_"):]
             role = m.group(2)
             slot = splits.setdefault(split_name, {})
             if role in slot:
@@ -143,14 +126,12 @@ def validate_zip_structure(
                 )
             found[key] = info.filename
 
-    # Check required files
     for req in REQUIRED_FILES:
         if req not in found:
             raise DatasetValidationError(
                 f"У ZIP не знайдено обов'язковий файл: {req}"
             )
 
-    # Validate splits completeness — кожен splits_<name>/ повинен мати всі три ролі
     for split_name, roles in list(splits.items()):
         missing = [r for r in SPLIT_ROLES if r not in roles]
         if missing:
@@ -177,14 +158,12 @@ def validate_csv_schemas(zf: zipfile.ZipFile, found: dict[str, str]) -> tuple[di
     dataframes: dict[str, pd.DataFrame] = {}
     warnings: list[str] = []
 
-    # Read all CSVs
     for name, internal_path in found.items():
         try:
             df = _read_csv_from_zip(zf, internal_path)
         except Exception as e:
             raise DatasetValidationError(f"Не вдалося прочитати {name}: {e}")
 
-        # Check required columns
         required = REQUIRED_COLUMNS.get(name, [])
         missing = [c for c in required if c not in df.columns]
         if missing:
@@ -194,7 +173,6 @@ def validate_csv_schemas(zf: zipfile.ZipFile, found: dict[str, str]) -> tuple[di
 
         dataframes[name] = df
 
-    # Validate news.csv content
     news_df = dataframes["news.csv"]
     if len(news_df) == 0:
         raise DatasetValidationError("news.csv порожній")
@@ -203,7 +181,6 @@ def validate_csv_schemas(zf: zipfile.ZipFile, found: dict[str, str]) -> tuple[di
             f"news.csv має {len(news_df)} рядків — максимум {MAX_NEWS_ROWS}"
         )
 
-    # Validate article_label column: must be FAKE, REAL, or empty
     if "article_label" in news_df.columns:
         def check_label(v):
             if pd.isna(v) or v == "":
@@ -218,17 +195,14 @@ def validate_csv_schemas(zf: zipfile.ZipFile, found: dict[str, str]) -> tuple[di
                 f"Приклади: {examples}. Допустимі значення: FAKE, REAL, або порожньо."
             )
 
-    # Check duplicate article_id
     if news_df["article_id"].duplicated().any():
         dupes = news_df["article_id"].duplicated().sum()
         warnings.append(f"news.csv має {dupes} дублікатів article_id")
 
-    # Check empty article_text
     empty_texts = news_df["article_text"].apply(lambda x: not str(x).strip()).sum()
     if empty_texts > 0:
         warnings.append(f"news.csv має {empty_texts} рядків з порожнім article_text")
 
-    # Validate FK relationships if tweets.csv is present
     if "tweets.csv" in dataframes:
         article_ids = set(news_df["article_id"].astype(str))
         tweets_df = dataframes["tweets.csv"]
@@ -238,7 +212,6 @@ def validate_csv_schemas(zf: zipfile.ZipFile, found: dict[str, str]) -> tuple[di
                 f"tweets.csv має {len(orphan_tweets)} рядків з article_id, якого немає в news.csv"
             )
 
-    # Validate FK: replies → tweets
     if "replies.csv" in dataframes and "tweets.csv" in dataframes:
         tweet_ids = set(dataframes["tweets.csv"]["tweet_id"].astype(str))
         orphan_replies = dataframes["replies.csv"][
@@ -251,8 +224,6 @@ def validate_csv_schemas(zf: zipfile.ZipFile, found: dict[str, str]) -> tuple[di
 
     return dataframes, warnings
 
-
-# ── Storage operations ───────────────────────────────────────────────────
 
 def save_dataset_files(
     user_id: int,
@@ -274,12 +245,10 @@ def save_dataset_files(
         shutil.rmtree(folder)
     folder.mkdir(parents=True, exist_ok=True)
 
-    # Save each CSV
     for filename, df in dataframes.items():
         out_path = folder / filename
         df.to_csv(out_path, index=False)
 
-    # Save manifest
     manifest = {
         "name": name,
         "description": description,
@@ -334,8 +303,6 @@ def compute_folder_size(folder: Path) -> int:
     return total
 
 
-# ── Statistics ───────────────────────────────────────────────────────────
-
 def compute_basic_stats(news_df: pd.DataFrame) -> dict:
     """Compute fake/real/unlabeled counts from news.csv."""
     total = len(news_df)
@@ -368,7 +335,6 @@ def get_preview(dataframes: dict[str, pd.DataFrame], n_rows: int = 5) -> dict:
     news_df = dataframes["news.csv"]
     preview_df = news_df.head(n_rows)
 
-    # Convert to list of dicts, truncating long text
     news_head = []
     for _, row in preview_df.iterrows():
         item = {}
@@ -403,7 +369,6 @@ def compute_detailed_stats(folder_path: str) -> dict:
 
     result: dict = {}
 
-    # news.csv
     news_path = folder / "news.csv"
     if not news_path.exists():
         raise FileNotFoundError("news.csv missing in dataset folder")
@@ -415,7 +380,6 @@ def compute_detailed_stats(folder_path: str) -> dict:
     result["real_count"] = basic["real"]
     result["unlabeled_count"] = basic["unlabeled"]
 
-    # Text length stats
     text_lens = news_df["article_text"].fillna("").astype(str).str.len()
     result["text_length_stats"] = {
         "min": int(text_lens.min()) if len(text_lens) else 0,
@@ -427,7 +391,6 @@ def compute_detailed_stats(folder_path: str) -> dict:
     result["empty_text_count"] = int((text_lens == 0).sum())
     result["duplicate_text_count"] = int(news_df["article_text"].duplicated().sum())
 
-    # Top domains (if domain column present)
     top_domains = []
     if "domain" in news_df.columns:
         domain_counts = news_df["domain"].fillna("").value_counts().head(10)
@@ -437,7 +400,6 @@ def compute_detailed_stats(folder_path: str) -> dict:
         ]
     result["top_domains"] = top_domains
 
-    # Tweets stats
     tweets_path = folder / "tweets.csv"
     if tweets_path.exists():
         tweets_df = pd.read_csv(tweets_path, dtype=str, keep_default_na=False, na_values=[""])
@@ -449,15 +411,12 @@ def compute_detailed_stats(folder_path: str) -> dict:
             if basic["total"] > 0:
                 result["news_with_tweets_pct"] = float(news_with_tweets / basic["total"] * 100)
 
-    # Engagement — handle both legacy (likes.csv) and post-rebuild (like_count column)
     likes_path = folder / "likes.csv"
     tweets_path_for_likes = folder / "tweets.csv"
 
     if likes_path.exists():
-        # Legacy format: count rows у likes.csv
         result["total_likes"] = int(len(pd.read_csv(likes_path)))
     elif tweets_path_for_likes.exists():
-        # Post-rebuild: sum like_count з усіх engagement files
         total_likes = 0
         for fname in ("tweets.csv", "retweets.csv", "replies.csv"):
             fpath = folder / fname
@@ -476,7 +435,6 @@ def compute_detailed_stats(folder_path: str) -> dict:
     if replies_path.exists():
         result["total_replies"] = int(len(pd.read_csv(replies_path)))
 
-    # Users
     users_path = folder / "users.csv"
     if users_path.exists():
         users_df = pd.read_csv(users_path, dtype=str, keep_default_na=False, na_values=[""])
@@ -503,8 +461,6 @@ def compute_detailed_stats(folder_path: str) -> dict:
     return result
 
 
-# ── Component detection ──────────────────────────────────────────────────
-
 def detect_components(dataframes: dict[str, pd.DataFrame]) -> dict[str, bool]:
     """Return {component_name: bool} indicating which CSVs/columns are present.
 
@@ -512,11 +468,8 @@ def detect_components(dataframes: dict[str, pd.DataFrame]) -> dict[str, bool]:
       - likes.csv exists with rows (legacy format)
       - like_count column exists in tweets/retweets/replies (post-rebuild)
     """
-    # Check legacy likes.csv format
     has_likes_csv = "likes.csv" in dataframes and len(dataframes["likes.csv"]) > 0
 
-    # Check new format: like_count column in any engagement CSV
-    # Cast to numeric — CSV reader може зберегти як string якщо дочитує з dtype=str
     has_likes_column = False
     for fname in ("tweets.csv", "retweets.csv", "replies.csv"):
         if fname in dataframes and "like_count" in dataframes[fname].columns:
@@ -526,7 +479,6 @@ def detect_components(dataframes: dict[str, pd.DataFrame]) -> dict[str, bool]:
                     has_likes_column = True
                     break
             except Exception:
-                # If conversion fails, treat as no likes
                 continue
 
     return {

@@ -27,12 +27,8 @@ from api.sources._relevance import filter_by_relevance
 
 logger = logging.getLogger(__name__)
 
-# In-memory cache: {(text_head, sources_tuple): (timestamp, posts)}
 _CONTEXT_CACHE: dict = {}
-_CACHE_TTL = 300.0  # 5 хв
-
-
-# ── Defaults для inference_requirements ──────────────────────────────────
+_CACHE_TTL = 300.0
 
 
 def derive_requirements(*, model_type: str, pipeline_type: str | None) -> dict:
@@ -71,7 +67,6 @@ def derive_requirements(*, model_type: str, pipeline_type: str | None) -> dict:
                 "edge_types": ["posts", "reposts"],
             },
         }
-    # text-only (NB article, DistilBERT, LLM)
     return {
         "claim_extraction": False,
         "social_search": {"enabled": False},
@@ -89,9 +84,6 @@ def needs_context(requirements: dict | None) -> bool:
         or (requirements.get("social_search") or {}).get("enabled")
         or (requirements.get("graph_construction") or {}).get("enabled")
     )
-
-
-# ── Main entry ───────────────────────────────────────────────────────────
 
 
 async def build_inference_context(
@@ -125,7 +117,6 @@ async def build_inference_context(
         "metadata": {},
     }
 
-    # ── 2a. Claim extraction (sync, але швидкий) ─────────────────────
     if inference_requirements.get("claim_extraction"):
         try:
             result = sync_extract_claims(text, use_llm=True)
@@ -136,9 +127,8 @@ async def build_inference_context(
             logger.warning(f"claim_extraction failed: {e}")
             warnings.append(f"claim_extraction_failed: {e}")
         if not context["claim"]:
-            context["claim"] = text[:200]  # graceful fallback
+            context["claim"] = text[:200]
 
-    # ── 2b. Social search (async, cached 5хв) ────────────────────────
     search_cfg = inference_requirements.get("social_search") or {}
     sources_used: list[str] = []
     if search_cfg.get("enabled"):
@@ -175,14 +165,12 @@ async def build_inference_context(
                 "social/graph features will be noisy."
             )
 
-    # ── 2c. Social aggregates (для NB-aggregated) ────────────────────
     agg_features = inference_requirements.get("social_aggregates") or []
     if agg_features and context["related_posts"] is not None:
         context["aggregates"] = _compute_social_aggregates(
             context["related_posts"], requested_features=agg_features,
         )
 
-    # ── 2d. Graph construction (Phase 2 — real propagation inputs) ───
     graph_cfg = inference_requirements.get("graph_construction") or {}
     if graph_cfg.get("enabled"):
         try:
@@ -211,9 +199,6 @@ async def build_inference_context(
         "warnings": warnings,
     }
     return context
-
-
-# ── Helpers ──────────────────────────────────────────────────────────────
 
 
 async def _search_across_sources(
@@ -327,14 +312,12 @@ async def _build_propagation_inputs(
     warnings: list[str] = []
 
     def _get(p, key, default=None):
-        # Унифікований accessor для NewsItem або dict (Phase 1 робить to_dict()).
         if isinstance(p, dict):
             v = p.get(key, default)
         else:
             v = getattr(p, key, default)
         return default if v is None else v
 
-    # ── 1) Tweets з related_posts (вже відфільтровані за relevance у Phase 1) ──
     tweets: list[dict] = []
     for p in related_posts[: top_k_for_thread * 3]:
         text_val = _get(p, "text", "")
@@ -364,7 +347,6 @@ async def _build_propagation_inputs(
             },
         }
 
-    # ── 2) Для top-K — fetch details (replies + reposted_by) ──
     retweets: list[dict] = []
     replies: list[dict] = []
     synthetic_retweet_count = 0
@@ -395,7 +377,6 @@ async def _build_propagation_inputs(
         if details is None:
             continue
 
-        # Replies (справжні текстові вузли) → parent_tweet_idx
         for reply in (details.replies or [])[:max_replies_per_post]:
             reply_text = (getattr(reply, "text", None) or "").strip()
             if not reply_text:
@@ -411,9 +392,6 @@ async def _build_propagation_inputs(
                 },
             })
 
-        # Reposted_by → synthetic retweets з текстом оригіналу.
-        # NewsItem reposters — це UserProfile; текст не дається бо repost у
-        # Bluesky/Mastodon — це pointer на оригінал.
         reposters = details.reposted_by or []
         for reposter in reposters[:20]:
             retweets.append({
@@ -427,8 +405,6 @@ async def _build_propagation_inputs(
             })
             synthetic_retweet_count += 1
 
-        # Якщо reposted_by пусто, але fetched_limits дає reposts_total —
-        # створюємо anonymous placeholder retweets (cap=10).
         if not reposters and getattr(details, "fetched_limits", None):
             reposts_total = (details.fetched_limits or {}).get("reposts_total")
             if reposts_total and reposts_total > 0:

@@ -52,8 +52,6 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/datasets", tags=["datasets"])
 
 
-# ── POST /datasets/upload ────────────────────────────────────────────────
-
 @router.post("/upload", response_model=DatasetUploadResponse, status_code=201)
 async def upload_dataset(
     file: UploadFile = File(...),
@@ -65,11 +63,9 @@ async def upload_dataset(
     """
     Upload a ZIP archive containing CSV files (news.csv + optional others).
     """
-    # Check filename extension
     if not file.filename or not file.filename.lower().endswith(".zip"):
         raise HTTPException(status_code=400, detail="Очікується ZIP файл (.zip)")
 
-    # Check for duplicate name (per user)
     existing = db.query(Dataset).filter(
         Dataset.user_id == current_user.id,
         Dataset.name == name,
@@ -80,34 +76,28 @@ async def upload_dataset(
             detail=f"Датасет з назвою '{name}' вже існує у вас",
         )
 
-    # Read bytes
     zip_bytes = await file.read()
 
-    # Validate ZIP structure
     try:
         zf, found_files, splits_in_zip = validate_zip_structure(zip_bytes)
     except DatasetValidationError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    # Validate schemas + content. We need the ZipFile open later for splits, тому
-    # читаємо CSVs у dataframes але не закриваємо archive (не використовуємо `with zf`).
     try:
         dataframes, warnings = validate_csv_schemas(zf, found_files)
     except DatasetValidationError as e:
         zf.close()
         raise HTTPException(status_code=400, detail=str(e))
 
-    # Compute basic stats
     news_df = dataframes["news.csv"]
     basic_stats = compute_basic_stats(news_df)
     components = detect_components(dataframes)
 
-    # Create DB record first (to get ID for folder path)
     record = Dataset(
         user_id=current_user.id,
         name=name,
         description=description.strip() or None,
-        folder_path="",  # filled after save
+        folder_path="",
         total_news=basic_stats["total"],
         fake_count=basic_stats["fake"],
         real_count=basic_stats["real"],
@@ -120,7 +110,6 @@ async def upload_dataset(
     db.commit()
     db.refresh(record)
 
-    # Save files to disk (now we have dataset_id)
     try:
         folder = save_dataset_files(
             current_user.id, record.id, dataframes,
@@ -134,7 +123,6 @@ async def upload_dataset(
         logger.exception("Failed to save dataset files")
         raise HTTPException(status_code=500, detail=f"Не вдалося зберегти файли: {e}")
     finally:
-        # Усі читання з ZIP завершено — закриваємо archive.
         try:
             zf.close()
         except Exception:
@@ -146,13 +134,11 @@ async def upload_dataset(
         )
         logger.info(f"Dataset id={record.id} saved with splits: {saved_splits}")
 
-    # Update record with folder path and size
     record.folder_path = str(folder)
     record.file_size_bytes = compute_folder_size(folder)
     db.commit()
     db.refresh(record)
 
-    # Preview
     preview = get_preview(dataframes, n_rows=5)
 
     logger.info(
@@ -165,8 +151,6 @@ async def upload_dataset(
         warnings=warnings,
     )
 
-
-# ── GET /datasets ────────────────────────────────────────────────────────
 
 @router.get("", response_model=list[DatasetResponse])
 def list_datasets(
@@ -183,8 +167,6 @@ def list_datasets(
     return records
 
 
-# ── GET /datasets/{id} ───────────────────────────────────────────────────
-
 @router.get("/{dataset_id}", response_model=DatasetResponse)
 def get_dataset(
     dataset_id: int,
@@ -199,8 +181,6 @@ def get_dataset(
         raise HTTPException(status_code=404, detail="Датасет не знайдено")
     return record
 
-
-# ── GET /datasets/{id}/stats ─────────────────────────────────────────────
 
 @router.get("/{dataset_id}/stats", response_model=DatasetStatsResponse)
 def get_dataset_stats(
@@ -226,8 +206,6 @@ def get_dataset_stats(
 
     return DatasetStatsResponse(dataset_id=dataset_id, **stats)
 
-
-# ── GET /datasets/{id}/splits ────────────────────────────────────────────
 
 def _count_csv_rows(path) -> int:
     """Кількість data-рядків у CSV (без header). Швидкий побайтовий count."""
@@ -283,8 +261,6 @@ def get_dataset_splits(
     }
 
 
-# ── PATCH /datasets/{id}/active-split ────────────────────────────────────
-
 @router.patch("/{dataset_id}/active-split")
 def set_active_split(
     dataset_id: int,
@@ -311,14 +287,11 @@ def set_active_split(
     return {"id": ds.id, "active_split": ds.active_split}
 
 
-# ── GET /datasets/{id}/template ──────────────────────────────────────────
-
 @router.get("/template/download")
 def download_template(_: User = Depends(get_current_user)):
     """Download a sample ZIP template showing the expected structure."""
     import pandas as pd
 
-    # Build minimal example CSVs in memory
     news = pd.DataFrame([
         {"article_id": "article_001", "article_text": "Scientists discover water on Mars.", "article_label": "REAL",
          "title": "Mars Water Found", "url": "https://example.com/mars", "domain": "example.com"},
@@ -340,14 +313,12 @@ def download_template(_: User = Depends(get_current_user)):
          "created_at": "2020-07-15"},
     ])
 
-    # Zip them up
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         zf.writestr("news.csv", news.to_csv(index=False))
         zf.writestr("tweets.csv", tweets.to_csv(index=False))
         zf.writestr("users.csv", users.to_csv(index=False))
 
-        # Also include a README
         readme = """Шаблон датасету для fake news detection
 
 ОБОВ'ЯЗКОВИЙ ФАЙЛ:
@@ -377,8 +348,6 @@ def download_template(_: User = Depends(get_current_user)):
     )
 
 
-# ── POST /datasets/{id}/activate ─────────────────────────────────────────
-
 @router.post("/{dataset_id}/activate")
 def activate_dataset(
     dataset_id: int,
@@ -393,7 +362,6 @@ def activate_dataset(
     if not record:
         raise HTTPException(status_code=404, detail="Датасет не знайдено")
 
-    # Deactivate all others for this user
     db.query(Dataset).filter(
         Dataset.user_id == current_user.id,
         Dataset.id != dataset_id,
@@ -424,8 +392,6 @@ def activate_dataset(
     }
 
 
-# ── PATCH /datasets/{id} ─────────────────────────────────────────────────
-
 @router.patch("/{dataset_id}", response_model=DatasetResponse)
 def update_dataset(
     dataset_id: int,
@@ -441,7 +407,6 @@ def update_dataset(
         raise HTTPException(status_code=404, detail="Датасет не знайдено")
 
     if upd.name is not None:
-        # Check uniqueness within user
         other = db.query(Dataset).filter(
             Dataset.user_id == current_user.id,
             Dataset.name == upd.name,
@@ -458,8 +423,6 @@ def update_dataset(
     db.refresh(record)
     return record
 
-
-# ── DELETE /datasets/{id} ────────────────────────────────────────────────
 
 @router.delete("/{dataset_id}")
 def delete_dataset(
@@ -478,7 +441,6 @@ def delete_dataset(
     db.delete(record)
     db.commit()
 
-    # Remove files (best-effort)
     try:
         delete_dataset_folder(folder_path)
     except Exception as e:
@@ -486,8 +448,6 @@ def delete_dataset(
 
     return {"ok": True, "deleted_id": dataset_id}
 
-
-# ── Embedding cache management ───────────────────────────────────────────
 
 @router.get("/{dataset_id}/embedding-cache")
 def get_embedding_cache_info(
@@ -547,8 +507,6 @@ def invalidate_embedding_cache(
     except requests.RequestException as e:
         raise HTTPException(503, f"Cache invalidation failed: {e}")
 
-
-# ── GET /datasets/active/info ────────────────────────────────────────────
 
 @router.get("/active/info", response_model=DatasetResponse | None)
 def get_active_dataset(

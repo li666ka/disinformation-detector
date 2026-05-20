@@ -1,4 +1,4 @@
-// ui/src/EvaluationResultsModal.tsx
+
 import React from "react";
 import { Button } from "./components/ui/button";
 import {
@@ -23,7 +23,7 @@ interface EvaluationResult {
         precision: number;
         recall: number;
         f1_score: number;
-        // Optional (всі моделі повертають однаковий набір)
+
         f1_macro?: number;
         roc_auc?: number;
         best_epoch?: number;
@@ -84,7 +84,7 @@ export default function EvaluationResultsModal({
                 </DialogHeader>
 
                 <div className="space-y-4">
-                    {/* Metric cards */}
+                    {}
                     <div className="grid grid-cols-4 gap-3">
                         {[
                             { label: "Accuracy", value: m.accuracy, color: "text-green-600" },
@@ -103,7 +103,7 @@ export default function EvaluationResultsModal({
                         ))}
                     </div>
 
-                    {/* Additional metrics — show only if available */}
+                    {}
                     {(m.f1_macro != null || m.roc_auc != null) && (
                         <div>
                             <h3 className="text-sm font-semibold mb-2">Додаткові метрики</h3>
@@ -130,7 +130,7 @@ export default function EvaluationResultsModal({
                         </div>
                     )}
 
-                    {/* Confusion Matrix */}
+                    {}
                     {cm && (
                         <div>
                             <h3 className="text-sm font-semibold mb-1">Матриця помилок</h3>
@@ -173,7 +173,7 @@ export default function EvaluationResultsModal({
                         </div>
                     )}
 
-                    {/* Meta info */}
+                    {}
                     <Card>
                         <CardContent className="p-3 text-xs text-muted-foreground">
                             <div className="flex items-center justify-between">
@@ -189,7 +189,7 @@ export default function EvaluationResultsModal({
                         </CardContent>
                     </Card>
 
-                    {/* Sample predictions (if LLM — показує reasoning) */}
+                    {}
                     {result.samples && result.samples.length > 0 && (
                         <div>
                             <h3 className="text-sm font-semibold mb-2 flex items-center gap-2">

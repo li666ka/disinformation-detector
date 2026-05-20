@@ -125,7 +125,7 @@ export default function EnsembleDetailsModal({ ensemble, onClose }: Props) {
         </DialogHeader>
 
         <div className="space-y-4">
-          {/* Metric cards — 4 main */}
+          {}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             {[
               { label: "Accuracy", value: ensemble.accuracy, color: "text-green-600" },
@@ -146,7 +146,7 @@ export default function EnsembleDetailsModal({ ensemble, onClose }: Props) {
             ))}
           </div>
 
-          {/* Additional metrics */}
+          {}
           {(ensemble.f1_macro != null || ensemble.roc_auc != null) && (
             <div>
               <h3 className="text-sm font-semibold mb-2">Додаткові метрики</h3>
@@ -170,7 +170,7 @@ export default function EnsembleDetailsModal({ ensemble, onClose }: Props) {
             </div>
           )}
 
-          {/* Confusion Matrix */}
+          {}
           {cm && (
             <div>
               <h3 className="text-sm font-semibold mb-1">Матриця помилок</h3>
@@ -219,7 +219,7 @@ export default function EnsembleDetailsModal({ ensemble, onClose }: Props) {
             </div>
           )}
 
-          {/* Alignment info — показуємо коли test sets членів не співпадають */}
+          {}
           {(() => {
             const ai = ensemble.alignment_info;
             if (!ai) return null;
@@ -260,7 +260,7 @@ export default function EnsembleDetailsModal({ ensemble, onClose }: Props) {
             );
           })()}
 
-          {/* Members */}
+          {}
           <div>
             <h3 className="text-sm font-semibold mb-2">Члени ансамблю</h3>
             <div className="space-y-2">
@@ -314,7 +314,7 @@ export default function EnsembleDetailsModal({ ensemble, onClose }: Props) {
             </div>
           </div>
 
-          {/* Comparison vs best member */}
+          {}
           {best && diff != null && (
             <Card>
               <CardContent className="p-3 text-sm">

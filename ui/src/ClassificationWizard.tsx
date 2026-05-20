@@ -10,7 +10,6 @@ import { Label } from "./components/ui/label";
 import { Check, ChevronLeft, ChevronRight, Info } from "lucide-react";
 import type { Dataset, FeatureGroupDef } from "./types";
 
-// ── Constants ────────────────────────────────────────────────────────────────
 
 const FEATURE_GROUPS: Record<string, FeatureGroupDef> = {
   semantic: {
@@ -42,12 +41,12 @@ const FEATURE_GROUPS: Record<string, FeatureGroupDef> = {
     label: "Стилістичні",
     description: "Форма тексту + риторичні маніпуляції (clickbait, authority refs)",
     features: [
-      // Original stylistic (4)
+
       { key: "caps_ratio", label: "Частка ВЕЛИКИХ ЛІТЕР", type: "stylistic" },
       { key: "ttr", label: "Лексичне різноманіття", type: "stylistic" },
       { key: "repetition_score", label: "Повторюваність фраз", type: "stylistic" },
       { key: "avg_word_length", label: "Середня довжина слова", type: "stylistic" },
-      // Merged from rhetorical (4)
+
       { key: "clickbait_score", label: "Клікбейт та маніпуляції", type: "stylistic" },
       { key: "authority_refs", label: "Анонімні посилання", type: "stylistic" },
       { key: "pronoun_ratio", label: "Займенники ми/вони", type: "stylistic" },
@@ -58,27 +57,27 @@ const FEATURE_GROUPS: Record<string, FeatureGroupDef> = {
     label: "Соціальні + Graph",
     description: "Профілі користувачів-поширювачів + структура поширення",
     features: [
-      // Profile counts (6)
+
       { key: "followers_count_norm", label: "Кількість підписників", type: "social" },
       { key: "friends_count_norm", label: "Кількість підписок", type: "social" },
       { key: "ff_ratio", label: "Співвідношення followers/friends", type: "social" },
       { key: "statuses_count_norm", label: "Кількість твітів", type: "social" },
       { key: "account_age_norm", label: "Вік акаунту", type: "social" },
       { key: "statuses_per_day", label: "Постів на день (bot signal)", type: "social" },
-      // Profile flags + strings (6)
+
       { key: "verified", label: "Верифікований акаунт", type: "social" },
       { key: "has_description", label: "Наявність опису", type: "social" },
       { key: "has_location", label: "Наявність локації", type: "social" },
       { key: "description_length_norm", label: "Довжина опису", type: "social" },
       { key: "screen_name_length_norm", label: "Довжина username", type: "social" },
       { key: "screen_name_digits_ratio", label: "Частка цифр у username", type: "social" },
-      // Engagement (5)
+
       { key: "like_count_norm", label: "Кількість лайків поста", type: "social" },
       { key: "retweet_count_norm", label: "Кількість ретвітів", type: "social" },
       { key: "reply_count_norm", label: "Кількість коментарів", type: "social" },
       { key: "like_to_retweet_ratio", label: "Likes/Retweets ratio (Shu 2020)", type: "social" },
       { key: "engagement_rate", label: "Engagement rate (Cha 2010)", type: "social" },
-      // Graph features (6 НОВИХ — обчислюються per-article з cascade)
+
       { key: "cascade_depth_norm", label: "Глибина каскаду reply tree", type: "social", isGraph: true },
       { key: "cascade_breadth_norm", label: "Ширина каскаду", type: "social", isGraph: true },
       { key: "lifetime_hours_norm", label: "Тривалість поширення (год)", type: "social", isGraph: true },
@@ -100,21 +99,21 @@ const getGroupLabel = (groupKey: string, modelType?: string): string =>
 
 const ALL_FEATURE_KEYS = [
   "text",
-  // Emotional — 14 keys
+
   "sentiment_score", "emotion_intensity", "emoji_count", "exclamation_count",
   "anger_score", "fear_score", "anticipation_score", "trust_score", "surprise_score",
   "sadness_score", "joy_score", "disgust_score", "positive_score", "negative_score",
-  // Stylistic — 8 keys (4 form + 4 rhetorical, об'єднано)
+
   "caps_ratio", "ttr", "repetition_score", "avg_word_length",
   "clickbait_score", "authority_refs", "pronoun_ratio", "question_count",
-  // Social — 23 keys (17 profile/engagement + 6 graph)
+
   "followers_count_norm", "friends_count_norm", "ff_ratio",
   "statuses_count_norm", "account_age_norm", "statuses_per_day",
   "verified", "has_description", "has_location",
   "description_length_norm", "screen_name_length_norm", "screen_name_digits_ratio",
   "like_count_norm", "retweet_count_norm", "reply_count_norm",
   "like_to_retweet_ratio", "engagement_rate",
-  // Graph cascade (6 нових)
+
   "cascade_depth_norm", "cascade_breadth_norm", "lifetime_hours_norm",
   "retweets_per_tweet", "replies_per_tweet", "unique_users_norm",
 ];
@@ -168,7 +167,7 @@ const DEFAULT_PARAMS: any = {
     learning_rate: "0.001",
     epochs: "50",
     pooling: "mean",
-    // GNN не використовує handcrafted features — node features = MiniLM embeddings.
+
   },
   sage: {
     hidden_dim: "128",
@@ -177,7 +176,7 @@ const DEFAULT_PARAMS: any = {
     learning_rate: "0.001",
     epochs: "50",
     aggregator: "mean",
-    // Аналогічно GIN — без handcrafted features.
+
   },
 };
 
@@ -192,8 +191,8 @@ type ClassificationWizardProps = {
 };
 
 export default function ClassificationWizard({ trainingMode = false, onConfigChange }: ClassificationWizardProps) {
-  // Ансамблі тепер живуть на окремій сторінці /ensembles — у тренувальному
-  // wizard'і завжди single-model режим.
+
+
   const mode = "single" as const;
   const [step, setStep] = useState<number>(0);
   const [selectedModel, setSelectedModel] = useState<string>("nb");
@@ -221,7 +220,7 @@ export default function ClassificationWizard({ trainingMode = false, onConfigCha
       const groups = [...(p.additional_groups || [])];
       const mask = { ...(p.feature_mask || buildDefaultMask(true)) };
 
-      // NB special-case: "Лексичні" (semantic) ↔ use_text
+
       if (type === "nb" && groupName === "semantic") {
         const newUseText = !(p.use_text ?? true);
         const idx = groups.indexOf("semantic");
@@ -273,7 +272,7 @@ export default function ClassificationWizard({ trainingMode = false, onConfigCha
 
   const handleNext = () => {
     if (!canNext()) return;
-    // Перед переходом з кроку "Модель" → ініціалізуємо params для вибраної моделі.
+
     if (step === 0) {
       setModelParams((prev: any) => (
         prev[selectedModel] ? prev : { ...prev, [selectedModel]: getDefaultParams(selectedModel) }
@@ -299,7 +298,7 @@ export default function ClassificationWizard({ trainingMode = false, onConfigCha
         if (hasGroups || hasAnyFeature) { model.additional_features = { groups, mask }; }
         else { model.additional_features = null; }
       } else {
-        // GNN: завжди null — node features = MiniLM embeddings.
+
         model.additional_features = null;
       }
       if (type === "nb") {
@@ -337,10 +336,9 @@ export default function ClassificationWizard({ trainingMode = false, onConfigCha
     if (!trainingMode || !onConfigChange) return;
     const config = buildRequest();
     onConfigChange(config);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
   }, [trainingMode, selectedModel, modelParams]);
 
-  // ── Step renderers ─────────────────────────────────────────────────────
 
   const renderSingleModelSelect = () => (
     <div className="space-y-3">
@@ -692,7 +690,7 @@ export default function ClassificationWizard({ trainingMode = false, onConfigCha
 
   return (
     <div className="max-w-3xl mx-auto">
-      {/* Step indicator */}
+      {}
       <div className="flex items-center mb-6">
         {stepLabels.map((label: string, i: number) => {
           const state = i < step ? "done" : i === step ? "active" : "pending";
@@ -723,10 +721,10 @@ export default function ClassificationWizard({ trainingMode = false, onConfigCha
         })}
       </div>
 
-      {/* Current step content */}
+      {}
       <div className="mb-4">{renderCurrentStep()}</div>
 
-      {/* Navigation */}
+      {}
       <div className="flex justify-between">
         <div>
           {step > 0 && (
@@ -747,7 +745,6 @@ export default function ClassificationWizard({ trainingMode = false, onConfigCha
   );
 }
 
-// ── Additional Features Section ──────────────────────────────────────────────
 
 function AdditionalFeaturesSection({
   type, groups, mask, params, toggleGroup, toggleFeature,
@@ -760,13 +757,13 @@ function AdditionalFeaturesSection({
       <p className="font-medium text-sm">Ознаки:</p>
       <p className="text-xs text-muted-foreground">Оберіть групи ознак для класифікації:</p>
       {Object.entries(FEATURE_GROUPS).map(([groupKey, groupDef]: any) => {
-        // NB+semantic = "Лексичні" → стан керується p.use_text
+
         const isLexicalNB = type === "nb" && groupKey === "semantic";
         const isActive = isLexicalNB
           ? (p.use_text ?? true)
           : groups.includes(groupKey);
-        // Для NB+semantic інкапсульовані параметри (vec/ngram/preproc) —
-        // не показуємо лічильник підпунктів, бо їх більше немає.
+
+
         const hasSubFeatures = !isLexicalNB && groupDef.features.length > 0;
         const activeInGroup = isActive && hasSubFeatures
           ? groupDef.features.filter((f: any) => featureMask[f.key]).length
@@ -789,7 +786,7 @@ function AdditionalFeaturesSection({
                 <Badge variant="secondary" className="text-[10px]">{activeInGroup}/{groupDef.features.length}</Badge>
               )}
             </div>
-            {/* NB+semantic active → render vectorizer + ngram + preprocessing inline */}
+            {}
             {isLexicalNB && isActive && (
               <NBLexicalParams
                 params={p}
@@ -824,7 +821,7 @@ function AdditionalFeaturesSection({
   );
 }
 
-// ── NB Lexical params block (rendered inside "Лексичні" group) ─────────────
+
 function NBLexicalParams({ params, setParam, togglePreprocessing, setModelParams, type }: any) {
   const p = params || {};
   const pp = p.preprocessing || {};

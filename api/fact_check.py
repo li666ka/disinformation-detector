@@ -199,9 +199,6 @@ def fact_check_claim(
         _store_cache(ck, result)
         return result
 
-    # Знижений з 0.4 до 0.25 + hybrid similarity (Jaccard ∪ char-ratio).
-    # SequenceMatcher ratio один не давав ≥0.4 навіть на семантично-еквівалентних
-    # парах, тому fact-check завжди повертав UNKNOWN.
     SIM_THRESHOLD = 0.25
     best_claim = None
     best_sim = 0.0
@@ -215,8 +212,6 @@ def fact_check_claim(
             best_claim = cand
 
     if best_claim is None:
-        # Google повернув candidates, але жоден без claimReview — це справді
-        # «нічого корисного». Залишаємо UNKNOWN.
         result = {
             "found": False,
             "claims": claims,
@@ -226,9 +221,6 @@ def fact_check_claim(
         _store_cache(ck, result)
         return result
 
-    # Є best candidate з review, але similarity ≥ 0.25 — забираємо вердикт,
-    # а нижче за threshold помічаємо low_confidence_match (UI може показати
-    # «можливо релевантне»).
     low_confidence = best_sim < SIM_THRESHOLD
 
     top_claim = best_claim

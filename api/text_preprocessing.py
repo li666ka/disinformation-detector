@@ -63,7 +63,6 @@ def preprocess_for_bayes(text: str) -> str:
     tokens = cleaned.split()
     lemmatizer, stop_words = _get_nlp_tools()
     if not lemmatizer or not stop_words:
-        # Fallback if NLTK resources are unavailable.
         return " ".join(tokens)
 
     filtered = [lemmatizer.lemmatize(tok) for tok in tokens if tok not in stop_words]

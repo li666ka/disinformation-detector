@@ -19,10 +19,6 @@ from api.llm_predictor import (
 )
 
 
-# ─────────────────────────────────────────────────────────────────
-# _parse_response — single-result JSON parsing
-# ─────────────────────────────────────────────────────────────────
-
 def test_parse_clean_json():
     text = '{"label": "FAKE", "confidence": 0.9, "reason": "clickbait headline"}'
     r = _parse_response(text)
@@ -90,10 +86,6 @@ def test_parse_failures_counter_increments():
     assert stats.get("parse_failed", 0) >= 1
 
 
-# ─────────────────────────────────────────────────────────────────
-# _parse_batch_response — order validation
-# ─────────────────────────────────────────────────────────────────
-
 def test_batch_in_order():
     response = (
         '[{"text_id": 0, "label": "FAKE", "confidence": 0.9},'
@@ -115,7 +107,7 @@ def test_batch_wrong_order():
     results = _parse_batch_response(response, expected_count=3)
     assert results[0]["label"] == "FAKE"
     assert results[2]["label"] == "REAL"
-    assert results[1] is None  # Missing text_id=1
+    assert results[1] is None
 
 
 def test_batch_legacy_id_field():
@@ -161,10 +153,6 @@ def test_batch_invalid_text_id_dropped():
     assert results[1]["label"] == "REAL"
 
 
-# ─────────────────────────────────────────────────────────────────
-# _build_batch_user_prompt — text_id markers must be present
-# ─────────────────────────────────────────────────────────────────
-
 def test_batch_prompt_includes_text_ids():
     prompt = _build_batch_user_prompt(["alpha", "beta", "gamma"])
     assert "Text ID 0:" in prompt
@@ -181,10 +169,6 @@ def test_batch_prompt_with_examples():
     assert "Text ID 0:" in prompt
 
 
-# ─────────────────────────────────────────────────────────────────
-# _check_claude_available — never raises
-# ─────────────────────────────────────────────────────────────────
-
 def test_check_claude_available_returns_tuple():
     available, error = _check_claude_available()
     assert isinstance(available, bool)
@@ -192,7 +176,7 @@ def test_check_claude_available_returns_tuple():
     if available:
         assert error == ""
     else:
-        assert error  # non-empty error message
+        assert error
 
 
 def test_check_claude_with_bad_path(monkeypatch=None):
@@ -207,10 +191,6 @@ def test_check_claude_with_bad_path(monkeypatch=None):
     finally:
         lp.CLAUDE_CLI = original
 
-
-# ─────────────────────────────────────────────────────────────────
-# Standalone runner
-# ─────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     import traceback

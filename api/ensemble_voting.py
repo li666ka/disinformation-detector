@@ -13,8 +13,6 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 
-# ── Voting primitives ───────────────────────────────────────────────────
-
 def hard_vote(
     predictions: list[np.ndarray],
     tie_breaker: str = "fake",
@@ -23,7 +21,7 @@ def hard_vote(
     if not predictions:
         raise ValueError("predictions list is empty")
 
-    stacked = np.stack(predictions, axis=0)  # [n_models, N]
+    stacked = np.stack(predictions, axis=0)
     n_models, n_samples = stacked.shape
     fake_votes = stacked.sum(axis=0)
     threshold = n_models / 2
@@ -90,8 +88,6 @@ def weighted_vote(
     return predictions, weighted_proba
 
 
-# ── Metrics fallback (як у api/llm_evaluator.py) ────────────────────────
-
 def _compute_metrics(
     y_true: np.ndarray,
     y_pred: np.ndarray,
@@ -100,7 +96,7 @@ def _compute_metrics(
     """Метрики бінарної класифікації. Спершу пробуємо ml_server.utils,
     інакше — локальний sklearn-based fallback."""
     try:
-        from ml_server.utils import compute_metrics  # type: ignore
+        from ml_server.utils import compute_metrics
         return compute_metrics(y_true=y_true, y_pred=y_pred, y_proba=y_proba)
     except ImportError:
         pass
@@ -133,8 +129,6 @@ def _compute_metrics(
             result["roc_auc"] = None
     return result
 
-
-# ── Alignment + orchestration ────────────────────────────────────────────
 
 def _align_members_by_article_id(
     members_data: list[dict],
@@ -254,8 +248,6 @@ def evaluate_ensemble(
         "metrics": metrics,
     }
 
-
-# ── Local predictions.json loader (без залежності від ml_server) ────────
 
 def load_predictions(predictions_path) -> dict:
     """Завантажити predictions.json. Без залежності від ml_server."""

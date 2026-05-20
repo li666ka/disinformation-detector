@@ -32,9 +32,6 @@ class EvaluateModelRequest(BaseModel):
     )
 
 
-# Підмножина додаткових метрик з metrics_json, які UI рендерить як окремі плитки
-# (f1_macro / ROC AUC у ModelsPage, F1 per-class у EvaluationResultsModal).
-# Метрики, що зберігаються лише у metrics_json (не SQL колонки) і рендеряться у UI.
 _EXTRA_METRIC_KEYS = ("f1_macro", "roc_auc")
 
 
@@ -61,7 +58,6 @@ def _serialize_model(
     if not isinstance(parsed, dict):
         return resp
 
-    # Fallback для колонок P/R/F1, якщо вони NULL у БД (старі записи).
     column_fallbacks = {
         "precision": ("precision",),
         "recall": ("recall",),
@@ -76,7 +72,6 @@ def _serialize_model(
                     setattr(resp, field, v)
                     break
 
-    # Extra метрики (живуть тільки у JSON, не в SQL колонках).
     for key in _EXTRA_METRIC_KEYS:
         v = parsed.get(key)
         if v is not None:
@@ -120,13 +115,11 @@ def activate_model(
         if not os.path.exists(pkl_path):
             raise HTTPException(status_code=404, detail="Model .pkl file missing from disk")
 
-    # Deactivate all, then activate target
     db.query(ModelRecord).update({"is_active": False})
     target.is_active = True
     db.commit()
     db.refresh(target)
 
-    # Hot-swap the live detector instance (skip for LLM presets without .pkl)
     if pkl_path:
         from api.main import detector
         detector.load_from_file(pkl_path)
@@ -150,7 +143,6 @@ def delete_all_models(
     base_path = os.path.join(os.path.dirname(__file__), "../..")
     models_dir = os.path.join(base_path, "models")
 
-    # Delete .pkl files from disk (LLM presets have no filename)
     for m in models:
         if not m.filename:
             continue
@@ -176,7 +168,6 @@ def delete_model(
     if not record:
         raise HTTPException(status_code=404, detail="Model not found")
 
-    # Best-effort видалення .pkl з диска (LLM presets без filename — пропускаємо)
     if record.filename:
         base_path = os.path.join(os.path.dirname(__file__), "../..")
         pkl_path = os.path.join(base_path, "models", record.filename)
@@ -219,7 +210,6 @@ def evaluate_model(
     if not active_ds:
         raise HTTPException(400, "Немає активного датасету. Активуйте у Datasets page.")
 
-    # ── LLM: локальна evaluation, асинхронна (НЕ через Colab) ──
     if record.model_type == "llm":
         try:
             preset_config = json.loads(record.llm_config) if record.llm_config else {}
@@ -242,9 +232,6 @@ def evaluate_model(
                     splits_subdir=splits_subdir,
                     progress_callback=lambda c, t: update_progress(job_id, c, t),
                 )
-                # Save metrics to record (own session — we're outside the request)
-                # Витягуємо predictions_compact окремо, щоб metrics_json не дублював
-                # повний JSON предсказань (вони у predictions_json).
                 predictions_compact = metrics.pop("_predictions_compact", None)
                 with SessionLocal() as fresh_db:
                     fresh_record = (
@@ -277,7 +264,6 @@ def evaluate_model(
             ),
         }
 
-    # ── NB / DistilBERT / GNN — на Colab (без змін) ──
     is_colab = os.getenv("IS_COLAB", "false").lower() in ("true", "1", "t")
     if not is_colab:
         raise HTTPException(503, "Evaluation потребує Colab (IS_COLAB=true)")
@@ -293,7 +279,6 @@ def evaluate_model(
                 "Модель не має model_path. Перетренуйте модель перш ніж evaluate.",
             )
 
-        # На Colab нова логіка: gin/sage → "gnn" + architecture; deberta → "distilbert".
         if record.model_type in ("gin", "sage"):
             colab_model_type = "gnn"
             architecture: str | None = record.model_type

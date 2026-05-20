@@ -1,4 +1,3 @@
-# api/sources/bluesky_client.py
 """
 Bluesky адаптер з повною підтримкою post details:
 - get_post_details — replies/likers/reposters/quoters з профілями
@@ -48,7 +47,7 @@ BSKY_URL_RE = re.compile(
 STANDARD_BSKY_TLDS = {"bsky.social", "bsky.app"}
 
 _PROFILE_CACHE: dict[str, tuple[dict, float]] = {}
-_PROFILE_CACHE_TTL = 600  # 10 min
+_PROFILE_CACHE_TTL = 600
 
 
 class BlueskySource(BaseNewsSource):
@@ -94,7 +93,6 @@ class BlueskySource(BaseNewsSource):
     def can_handle_url(self, url: str) -> bool:
         return bool(BSKY_URL_RE.search(url))
 
-    # ── Public: basic methods ───────────────────────────────────────────
 
     async def search(self, query: str, limit: int = 20) -> list[NewsItem]:
         def _sync():
@@ -157,7 +155,6 @@ class BlueskySource(BaseNewsSource):
         items = await self._parse_posts_enriched([post])
         return items[0] if items else None
 
-    # ── Public: post details with full interactions ─────────────────────
 
     async def get_post_details(
         self,
@@ -178,7 +175,6 @@ class BlueskySource(BaseNewsSource):
         if not at_uri:
             return None
 
-        # Fetch all interactions concurrently
         post_task = asyncio.create_task(self._fetch_post_with_thread(at_uri, max_replies))
         likes_task = asyncio.create_task(self._fetch_likes(at_uri, max_likers))
         reposts_task = asyncio.create_task(self._fetch_reposted_by(at_uri, max_reposters))
@@ -192,7 +188,6 @@ class BlueskySource(BaseNewsSource):
         reposted_by, reposts_fetched = await reposts_task
         quoted_by = await quotes_task
 
-        # Enrich reply authors' profiles in batch
         reply_author_dids = [r.author.id for r in replies if r.author and r.author.id]
         if reply_author_dids:
             profiles_map = await self._fetch_profiles_batch(reply_author_dids)
@@ -200,7 +195,6 @@ class BlueskySource(BaseNewsSource):
                 if r.author and r.author.id in profiles_map:
                     self._enrich_profile(r.author, profiles_map[r.author.id])
 
-        # Analyze participants
         all_participants = liked_by + reposted_by + quoted_by + [r.author for r in replies if r.author]
 
         return PostDetails(
@@ -226,17 +220,13 @@ class BlueskySource(BaseNewsSource):
             },
         )
 
-    # ── Private: resolve ID ─────────────────────────────────────────────
 
     async def _resolve_post_id(self, post_id: str) -> Optional[str]:
         """Convert any valid Bluesky post identifier to at:// URI."""
-        # Already an at:// URI
         if post_id.startswith("at://"):
             return post_id
-        # Prefixed format: "bluesky:at://..."
         if post_id.startswith("bluesky:at://"):
             return post_id[len("bluesky:"):]
-        # Web URL
         match = BSKY_URL_RE.search(post_id)
         if match:
             handle, rkey = match.group(1), match.group(2)
@@ -256,7 +246,6 @@ class BlueskySource(BaseNewsSource):
 
         return await asyncio.to_thread(_sync)
 
-    # ── Private: post thread fetcher ────────────────────────────────────
 
     async def _fetch_post_with_thread(
         self, at_uri: str, max_replies: int
@@ -270,7 +259,7 @@ class BlueskySource(BaseNewsSource):
             try:
                 resp = client.app.bsky.feed.get_post_thread({
                     "uri": at_uri,
-                    "depth": 1,  # Direct replies only
+                    "depth": 1,
                     "parentHeight": 0,
                 })
                 return resp.thread
@@ -286,7 +275,6 @@ class BlueskySource(BaseNewsSource):
         items = await self._parse_posts_enriched([main_post_view])
         news_item = items[0] if items else None
 
-        # Extract replies
         replies_list = []
         raw_replies = getattr(thread, "replies", None) or []
         for r in raw_replies[:max_replies]:
@@ -334,7 +322,6 @@ class BlueskySource(BaseNewsSource):
             handle=f"@{author_handle}" if author_handle else None,
             display_name=display_name,
             has_custom_domain=has_custom,
-            # Other fields enriched later via batch profile fetch
         )
 
         post_uri = getattr(post_view, "uri", "")
@@ -355,7 +342,6 @@ class BlueskySource(BaseNewsSource):
             url=web_url,
         )
 
-    # ── Private: likes fetcher ──────────────────────────────────────────
 
     async def _fetch_likes(
         self, at_uri: str, max_likers: int
@@ -387,13 +373,11 @@ class BlueskySource(BaseNewsSource):
                 return all_likes
 
         likes_raw = await asyncio.to_thread(_sync)
-        # Each like has .actor which is ProfileView (lite)
         profiles = []
         for like in likes_raw:
             actor = getattr(like, "actor", None)
             if actor:
                 profiles.append(self._profile_view_to_user_profile(actor))
-        # Enrich with full profile data
         dids = [p.id for p in profiles if p.id]
         if dids:
             full_profiles = await self._fetch_profiles_batch(dids)
@@ -402,7 +386,6 @@ class BlueskySource(BaseNewsSource):
                     self._enrich_profile(p, full_profiles[p.id])
         return profiles, len(profiles)
 
-    # ── Private: reposts fetcher ────────────────────────────────────────
 
     async def _fetch_reposted_by(
         self, at_uri: str, max_reposters: int
@@ -440,7 +423,6 @@ class BlueskySource(BaseNewsSource):
                     self._enrich_profile(p, full_profiles[p.id])
         return profiles, len(profiles)
 
-    # ── Private: quotes fetcher ─────────────────────────────────────────
 
     async def _fetch_quotes(self, at_uri: str, max_quoters: int) -> list[UserProfile]:
         """Fetch quote-posts, extract author profiles."""
@@ -480,7 +462,6 @@ class BlueskySource(BaseNewsSource):
                     self._enrich_profile(p, full_profiles[p.id])
         return profiles
 
-    # ── Private: profile utils ──────────────────────────────────────────
 
     def _profile_view_to_user_profile(self, actor) -> UserProfile:
         """Convert atproto ProfileView (basic) → UserProfile (partial)."""
@@ -496,7 +477,6 @@ class BlueskySource(BaseNewsSource):
             handle=f"@{handle}" if handle else None,
             display_name=display_name,
             has_custom_domain=has_custom,
-            # Enriched later with batch getProfiles
         )
 
     def _enrich_profile(self, profile: UserProfile, detail: dict):
@@ -565,7 +545,6 @@ class BlueskySource(BaseNewsSource):
                 result[did] = pdict
         return result
 
-    # ── Parsing (existing) ──────────────────────────────────────────────
 
     async def _parse_posts_enriched(self, posts) -> list[NewsItem]:
         if not posts:

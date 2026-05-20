@@ -9,9 +9,6 @@ import threading
 import uuid
 from typing import Optional
 
-# {job_id: {"status": "pending"|"running"|"done"|"failed",
-#           "progress": (current, total),
-#           "result": dict | None, "error": str | None}}
 _jobs: dict[str, dict] = {}
 _lock = threading.Lock()
 
@@ -53,4 +50,4 @@ def get_status(job_id: str) -> Optional[dict]:
     with _lock:
         if job_id not in _jobs:
             return None
-        return dict(_jobs[job_id])  # shallow copy
+        return dict(_jobs[job_id])

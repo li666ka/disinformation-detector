@@ -22,7 +22,7 @@ function capitalize(s: string): string {
 
 export interface SplitsSectionProps {
   dataset: Dataset;
-  /** Called after successful PATCH so the parent can refetch dataset list. */
+
   onChange?: () => void | Promise<void>;
 }
 

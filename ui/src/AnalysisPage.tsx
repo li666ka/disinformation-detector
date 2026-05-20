@@ -1,4 +1,4 @@
-// ui/src/AnalysisPage.tsx
+
 import React, { useEffect, useMemo, useState } from "react";
 import api from "./api";
 import { toast } from "sonner";
@@ -70,22 +70,22 @@ const EXCLUDED_TYPES = new Set(["gin", "sage", "gnn"]);
 const SOURCES = ["mastodon", "bluesky"] as const;
 
 export default function AnalysisPage() {
-  // Models + selection
+
   const [models, setModels] = useState<ModelRecord[]>([]);
   const [modelId, setModelId] = useState<number | "auto">("auto");
   const [loadingModels, setLoadingModels] = useState<boolean>(true);
 
-  // Request state
+
   const [loading, setLoading] = useState<boolean>(false);
   const [result, setResult] = useState<AnalyzeV2Response | null>(null);
 
-  // Per-mode input
+
   const [mode, setMode] = useState<AnalyzeInputMode>("text");
   const [textInput, setTextInput] = useState<string>("");
   const [urlInput, setUrlInput] = useState<string>("");
   const [claimInput, setClaimInput] = useState<string>("");
 
-  // Options
+
   const [extractClaim, setExtractClaim] = useState<boolean>(true);
   const [factCheck, setFactCheck] = useState<boolean>(false);
   const [classifyExtracted, setClassifyExtracted] = useState<boolean>(false);
@@ -94,7 +94,7 @@ export default function AnalysisPage() {
   );
   const [searchLimit, setSearchLimit] = useState<number>(20);
 
-  // ML server health (Colab ngrok tunnel часто падає — показуємо banner)
+
   type MLStatus = {
     ok: boolean;
     url_set: boolean;
@@ -123,7 +123,7 @@ export default function AnalysisPage() {
     refreshMlStatus();
   }, []);
 
-  // Чи обрана модель потребує Colab? Для LLM presets — ні, для всіх інших — так.
+
   const selectedModel =
     modelId === "auto" ? null : models.find((m) => m.id === modelId) || null;
   const needsColab =
@@ -187,7 +187,7 @@ export default function AnalysisPage() {
     } catch (err: any) {
       const body = err?.response?.data;
       if (body?.error === "ml_server_offline" || body?.error === "ml_server_not_ready") {
-        // 503 з нашого ml_client → оновити banner і показати message як є
+
         refreshMlStatus(true);
         toast.error(body.message || "ML server недоступний");
       } else {
@@ -215,7 +215,7 @@ export default function AnalysisPage() {
         </p>
       </div>
 
-      {/* ML server status banner — показуємо лише коли offline і обрана модель потребує Colab */}
+      {}
       {mlBlocking && (
         <Alert variant="destructive">
           <AlertTriangle className="h-4 w-4" />
@@ -247,7 +247,7 @@ export default function AnalysisPage() {
         </Alert>
       )}
 
-      {/* Mode selector */}
+      {}
       <Tabs value={mode} onValueChange={handleSwitchMode}>
         <TabsList className="grid grid-cols-3 max-w-2xl">
           <TabsTrigger value="text" className="gap-1.5">
@@ -389,7 +389,7 @@ export default function AnalysisPage() {
         </TabsContent>
       </Tabs>
 
-      {/* Settings */}
+      {}
       <Card>
         <CardHeader>
           <CardTitle className="text-base flex items-center gap-2">
@@ -398,7 +398,7 @@ export default function AnalysisPage() {
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
-          {/* Model */}
+          {}
           <div className="space-y-1.5">
             <Label>Модель класифікації</Label>
             <Select
@@ -471,10 +471,7 @@ export default function AnalysisPage() {
               </p>
             )}
 
-            {/* Distribution-shift warning для GIN/SAGE: модель тренована
-                на FakeNewsNet Twitter cascades (2017-2018), а inference йде
-                на live Bluesky/Mastodon → результати інтерпретувати як
-                архітектурну демонстрацію. */}
+            {}
             {selectedModel
               && ["gin", "sage", "gnn"].includes(selectedModel.model_type) && (
               <Alert className="mt-3">
@@ -490,7 +487,7 @@ export default function AnalysisPage() {
             )}
           </div>
 
-          {/* Options */}
+          {}
           <div className="space-y-2 pt-3 border-t">
             <Label className="text-xs">Опції</Label>
             <div className="space-y-2">
@@ -525,7 +522,7 @@ export default function AnalysisPage() {
         </CardContent>
       </Card>
 
-      {/* Submit */}
+      {}
       <div className="flex flex-wrap items-center gap-2">
         <Button
           onClick={handleAnalyze}
@@ -547,7 +544,7 @@ export default function AnalysisPage() {
         </Button>
       </div>
 
-      {/* Result / empty state */}
+      {}
       {result ? (
         <AnalysisResultPanel result={result} />
       ) : (

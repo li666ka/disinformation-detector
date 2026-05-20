@@ -1,4 +1,3 @@
-# api/sources/base.py
 """
 Абстрактний інтерфейс для джерел даних соціальних мереж та новин.
 
@@ -19,64 +18,49 @@ from datetime import datetime, timezone
 from typing import Optional
 
 
-# ──────────────────────────────────────────────────────────────────────────
-# User Profile
-# ──────────────────────────────────────────────────────────────────────────
-
 @dataclass
 class UserProfile:
     """
     Повний профіль користувача (автор поста, лайкер, репостер, автор reply).
     Усі опціональні — різні платформи дають різний набір.
     """
-    # Identification
-    id: str                                # DID (Bluesky) or acct@instance (Mastodon)
-    source: str                            # "bluesky" | "mastodon"
-    handle: Optional[str] = None           # @user.bsky.social or @user@instance
+    id: str
+    source: str
+    handle: Optional[str] = None
     display_name: Optional[str] = None
 
-    # Profile metadata
     description: Optional[str] = None
     avatar_url: Optional[str] = None
-    created_at: Optional[str] = None       # ISO-8601 — account creation
-    account_age_days: Optional[int] = None # Computed from created_at
+    created_at: Optional[str] = None
+    account_age_days: Optional[int] = None
 
-    # Social graph
     followers_count: Optional[int] = None
     following_count: Optional[int] = None
     posts_count: Optional[int] = None
 
-    # Trust signals
-    is_verified: Optional[bool] = None     # Mastodon: verified_at in fields; Bluesky: N/A
-    has_custom_domain: Optional[bool] = None  # Bluesky: handle is custom domain
-    is_bot: Optional[bool] = None          # Mastodon has this flag
+    is_verified: Optional[bool] = None
+    has_custom_domain: Optional[bool] = None
+    is_bot: Optional[bool] = None
     has_description: Optional[bool] = None
 
-    # Computed fields (from above)
     followers_following_ratio: Optional[float] = None
 
     def to_dict(self) -> dict:
         return asdict(self)
 
 
-# ──────────────────────────────────────────────────────────────────────────
-# Reply
-# ──────────────────────────────────────────────────────────────────────────
-
 @dataclass
 class Reply:
     """Відповідь на пост (з текстом і профілем автора відповіді)."""
-    id: str                                # Reply post ID
+    id: str
     text: str
     created_at: Optional[str] = None
-    author: Optional[UserProfile] = None   # Повний профіль автора відповіді
+    author: Optional[UserProfile] = None
 
-    # Engagement on the reply itself
     likes_count: Optional[int] = None
     reposts_count: Optional[int] = None
-    replies_count: Optional[int] = None   # Nested replies count
+    replies_count: Optional[int] = None
 
-    # For UI: URL to view this reply
     url: Optional[str] = None
 
     def to_dict(self) -> dict:
@@ -86,10 +70,6 @@ class Reply:
         return d
 
 
-# ──────────────────────────────────────────────────────────────────────────
-# PostDetails
-# ──────────────────────────────────────────────────────────────────────────
-
 @dataclass
 class PostDetails:
     """
@@ -98,21 +78,16 @@ class PostDetails:
     Використовується для deep analysis окремого поста — показує хто саме
     лайкнув, репостнув, відповів.
     """
-    # Base post data
-    post: "NewsItem"                       # The main post
+    post: "NewsItem"
 
-    # Interactions (profiles)
     replies: list[Reply] = field(default_factory=list)
     reposted_by: list[UserProfile] = field(default_factory=list)
     liked_by: list[UserProfile] = field(default_factory=list)
-    quoted_by: list[UserProfile] = field(default_factory=list)  # Bluesky-specific
+    quoted_by: list[UserProfile] = field(default_factory=list)
 
-    # Aggregated analysis of participants
-    stats: Optional[dict] = None           # Computed by enricher (see cross_platform.py)
+    stats: Optional[dict] = None
 
-    # Hints about what couldn't be fetched (API limits, privacy)
-    # E.g., Bluesky getLikes may return max 100; if total likes > 100, flag this
-    fetched_limits: Optional[dict] = None  # {"likes_fetched": 100, "likes_total": 9656, ...}
+    fetched_limits: Optional[dict] = None
 
     def to_dict(self) -> dict:
         return {
@@ -125,10 +100,6 @@ class PostDetails:
             "fetched_limits": self.fetched_limits,
         }
 
-
-# ──────────────────────────────────────────────────────────────────────────
-# NewsItem (existing, extended)
-# ──────────────────────────────────────────────────────────────────────────
 
 @dataclass
 class NewsItem:
@@ -152,7 +123,6 @@ class NewsItem:
       has_url_in_text, has_mentions, is_reply, labels
     """
 
-    # ── Level 1: Universal ─────────────────────────────────────────────
     id: str
     source: str
     url: str
@@ -161,7 +131,6 @@ class NewsItem:
     created_at: Optional[str] = None
     language: Optional[str] = None
 
-    # ── Level 2: Author signals ────────────────────────────────────────
     author: Optional[str] = None
     author_handle: Optional[str] = None
     author_account_age_days: Optional[int] = None
@@ -172,13 +141,11 @@ class NewsItem:
     author_has_custom_domain: Optional[bool] = None
     author_has_description: Optional[bool] = None
 
-    # ── Level 3: Engagement signals ────────────────────────────────────
     likes_count: Optional[int] = None
     reposts_count: Optional[int] = None
     replies_count: Optional[int] = None
     quote_count: Optional[int] = None
 
-    # ── Level 4: Platform-specific ─────────────────────────────────────
     has_url_in_text: Optional[bool] = None
     has_mentions: Optional[bool] = None
     is_reply: Optional[bool] = None
@@ -189,10 +156,6 @@ class NewsItem:
     def to_dict(self) -> dict:
         return asdict(self)
 
-
-# ──────────────────────────────────────────────────────────────────────────
-# Base source class
-# ──────────────────────────────────────────────────────────────────────────
 
 class BaseNewsSource(ABC):
     """
@@ -242,10 +205,6 @@ class SourceError(Exception):
         self.message = message
         self.http_code = http_code
 
-
-# ──────────────────────────────────────────────────────────────────────────
-# Helpers
-# ──────────────────────────────────────────────────────────────────────────
 
 _URL_IN_TEXT_RE = re.compile(r'https?://\S+', re.IGNORECASE)
 _MENTION_RE = re.compile(r'@\w+', re.IGNORECASE)
